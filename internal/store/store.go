@@ -57,6 +57,9 @@ type Subscription interface {
 type Store interface {
 	EventQueue
 
+	// SaveTask stores desired task state and publishes a reconcile event. If the
+	// task already exists, its controller-owned status is preserved atomically;
+	// callers must use UpdateTaskStatus to change observed state.
 	SaveTask(ctx context.Context, task *v1alpha1.Task) error
 	GetTask(ctx context.Context, atespace, name string) (*v1alpha1.Task, error)
 	ListTasks(ctx context.Context, atespace string, limit, offset int64) ([]*v1alpha1.Task, error)

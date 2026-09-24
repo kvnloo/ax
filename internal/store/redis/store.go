@@ -26,6 +26,7 @@ import (
 	"github.com/google/ax/pkg/apis/v1alpha1"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -49,7 +50,7 @@ type Options struct {
 	// ReadBatchSize is how many events one XREADGROUP call may return.
 	ReadBatchSize int64
 	// ReadBlock is how long one XREADGROUP call waits for events before returning
-	// empty. Shorter values make shutdown more responsive at the cost of more calls.
+	// empty. Shorter values make shutdown responsive at the cost of more calls.
 	ReadBlock time.Duration
 }
 
@@ -158,6 +159,9 @@ func (s *Store) SaveTask(ctx context.Context, task *v1alpha1.Task) error {
 
 	for attempt := 0; attempt < taskTxnMaxRetries; attempt++ {
 		err := s.client.Watch(ctx, func(tx *redis.Tx) error {
+			// Do not carry observed status from a failed attempt into a retry.
+			// The record may have been deleted or expired in between attempts.
+			candidate := proto.Clone(task).(*v1alpha1.Task)
 			stored, err := tx.Get(ctx, key).Bytes()
 			switch {
 			case err == nil:
@@ -165,19 +169,19 @@ func (s *Store) SaveTask(ctx context.Context, task *v1alpha1.Task) error {
 				if err := jsonUnmarshalOpts.Unmarshal(stored, &existing); err != nil {
 					return fmt.Errorf("unmarshaling existing task: %w", err)
 				}
-				task.Status = existing.Status
+				candidate.Status = existing.Status
 			case errors.Is(err, redis.Nil):
-				if task.Status == nil {
-					task.Status = &v1alpha1.TaskStatus{}
+				if candidate.Status == nil {
+					candidate.Status = &v1alpha1.TaskStatus{}
 				}
-				if task.Status.Phase == "" {
-					task.Status.Phase = "Pending"
+				if candidate.Status.Phase == "" {
+					candidate.Status.Phase = "Pending"
 				}
 			default:
 				return err
 			}
 
-			data, err := protojson.Marshal(task)
+			data, err := protojson.Marshal(candidate)
 			if err != nil {
 				return fmt.Errorf("marshaling task: %w", err)
 			}
@@ -198,6 +202,9 @@ func (s *Store) SaveTask(ctx context.Context, task *v1alpha1.Task) error {
 				pipe.Publish(ctx, s.taskPubSubChannel(atespace, name), data)
 				return nil
 			})
+			if err == nil {
+				task.Status = candidate.Status
+			}
 			return err
 		}, key)
 		if err == nil {

@@ -32,6 +32,7 @@ const (
 	defaultStreamName    = "ax:stream:tasks"
 	defaultReadBatchSize = 10
 	defaultReadBlock     = 2 * time.Second
+	taskTxnMaxRetries    = 8
 )
 
 var (
@@ -130,7 +131,9 @@ func (s *Store) taskPubSubChannel(atespace, name string) string {
 	return fmt.Sprintf("%s:pubsub:task:%s:%s", s.opts.KeyPrefix, atespace, name)
 }
 
-// SaveTask stores or updates a task and publishes a reconcile event to the stream.
+// SaveTask stores or updates desired task state and publishes a reconcile event.
+// Existing controller-owned status is preserved in the same optimistic transaction
+// that replaces the task, so a concurrent status update cannot be lost.
 func (s *Store) SaveTask(ctx context.Context, task *v1alpha1.Task) error {
 	if task.Metadata == nil {
 		task.Metadata = &v1alpha1.ObjectMeta{}
@@ -147,42 +150,64 @@ func (s *Store) SaveTask(ctx context.Context, task *v1alpha1.Task) error {
 	if task.Kind == "" {
 		task.Kind = v1alpha1.KindTask
 	}
-	if task.Status == nil {
-		task.Status = &v1alpha1.TaskStatus{}
-	}
-	if task.Status.Phase == "" {
-		task.Status.Phase = "Pending"
-	}
-
-	data, err := protojson.Marshal(task)
-	if err != nil {
-		return fmt.Errorf("marshaling task: %w", err)
-	}
 
 	atespace := task.Metadata.Atespace
 	name := task.Metadata.Name
-	score := float64(time.Now().UnixNano())
+	key := s.taskKey(atespace, name)
 	member := fmt.Sprintf("%s:%s", atespace, name)
 
-	pipe := s.client.TxPipeline()
-	pipe.Set(ctx, s.taskKey(atespace, name), data, s.opts.TTL)
-	pipe.ZAdd(ctx, s.taskIndexKey(), redis.Z{Score: score, Member: member})
-	pipe.ZAdd(ctx, s.taskAtespaceIndexKey(atespace), redis.Z{Score: score, Member: name})
-	pipe.XAdd(ctx, &redis.XAddArgs{
-		Stream: s.opts.StreamName,
-		Values: map[string]interface{}{
-			"action":   "reconcile",
-			"atespace": atespace,
-			"name":     name,
-		},
-	})
-	pipe.Publish(ctx, s.taskPubSubChannel(atespace, name), data)
+	for attempt := 0; attempt < taskTxnMaxRetries; attempt++ {
+		err := s.client.Watch(ctx, func(tx *redis.Tx) error {
+			stored, err := tx.Get(ctx, key).Bytes()
+			switch {
+			case err == nil:
+				var existing v1alpha1.Task
+				if err := jsonUnmarshalOpts.Unmarshal(stored, &existing); err != nil {
+					return fmt.Errorf("unmarshaling existing task: %w", err)
+				}
+				task.Status = existing.Status
+			case errors.Is(err, redis.Nil):
+				if task.Status == nil {
+					task.Status = &v1alpha1.TaskStatus{}
+				}
+				if task.Status.Phase == "" {
+					task.Status.Phase = "Pending"
+				}
+			default:
+				return err
+			}
 
-	_, err = pipe.Exec(ctx)
-	if err != nil {
-		return fmt.Errorf("saving task to redis: %w", err)
+			data, err := protojson.Marshal(task)
+			if err != nil {
+				return fmt.Errorf("marshaling task: %w", err)
+			}
+			score := float64(time.Now().UnixNano())
+
+			_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+				pipe.Set(ctx, key, data, s.opts.TTL)
+				pipe.ZAdd(ctx, s.taskIndexKey(), redis.Z{Score: score, Member: member})
+				pipe.ZAdd(ctx, s.taskAtespaceIndexKey(atespace), redis.Z{Score: score, Member: name})
+				pipe.XAdd(ctx, &redis.XAddArgs{
+					Stream: s.opts.StreamName,
+					Values: map[string]interface{}{
+						"action":   "reconcile",
+						"atespace": atespace,
+						"name":     name,
+					},
+				})
+				pipe.Publish(ctx, s.taskPubSubChannel(atespace, name), data)
+				return nil
+			})
+			return err
+		}, key)
+		if err == nil {
+			return nil
+		}
+		if err != redis.TxFailedErr {
+			return fmt.Errorf("saving task to redis: %w", err)
+		}
 	}
-	return nil
+	return fmt.Errorf("saving task to redis: too much concurrent modification")
 }
 
 // GetTask retrieves a task by atespace and name.
@@ -267,27 +292,50 @@ func (s *Store) ListTasks(ctx context.Context, atespace string, limit, offset in
 	return tasks, nil
 }
 
-// UpdateTaskStatus updates only the status portion of a task.
+// UpdateTaskStatus updates only the status portion of a task. The update is
+// optimistic so a concurrent desired-state write cannot be overwritten by an
+// older task snapshot.
 func (s *Store) UpdateTaskStatus(ctx context.Context, atespace, name string, status *v1alpha1.TaskStatus) error {
-	task, err := s.GetTask(ctx, atespace, name)
-	if err != nil {
-		return err
+	if atespace == "" {
+		atespace = "default"
 	}
+	key := s.taskKey(atespace, name)
 
-	task.Status = status
-	data, err := jsonMarshalOpts.Marshal(task)
-	if err != nil {
-		return fmt.Errorf("marshaling task status: %w", err)
-	}
+	for attempt := 0; attempt < taskTxnMaxRetries; attempt++ {
+		err := s.client.Watch(ctx, func(tx *redis.Tx) error {
+			stored, err := tx.Get(ctx, key).Bytes()
+			if errors.Is(err, redis.Nil) {
+				return store.ErrNotFound
+			}
+			if err != nil {
+				return err
+			}
 
-	pipe := s.client.TxPipeline()
-	pipe.Set(ctx, s.taskKey(atespace, name), data, s.opts.TTL)
-	pipe.Publish(ctx, s.taskPubSubChannel(atespace, name), data)
-	_, err = pipe.Exec(ctx)
-	if err != nil {
-		return fmt.Errorf("updating task status in redis: %w", err)
+			var task v1alpha1.Task
+			if err := jsonUnmarshalOpts.Unmarshal(stored, &task); err != nil {
+				return fmt.Errorf("unmarshaling task: %w", err)
+			}
+			task.Status = status
+			data, err := jsonMarshalOpts.Marshal(&task)
+			if err != nil {
+				return fmt.Errorf("marshaling task status: %w", err)
+			}
+
+			_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+				pipe.Set(ctx, key, data, s.opts.TTL)
+				pipe.Publish(ctx, s.taskPubSubChannel(atespace, name), data)
+				return nil
+			})
+			return err
+		}, key)
+		if err == nil {
+			return nil
+		}
+		if err != redis.TxFailedErr {
+			return fmt.Errorf("updating task status in redis: %w", err)
+		}
 	}
-	return nil
+	return fmt.Errorf("updating task status in redis: too much concurrent modification")
 }
 
 // MarkTaskDeleting flips the task to the Terminating phase, notifies watchers, and

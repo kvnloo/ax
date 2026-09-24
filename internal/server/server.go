@@ -116,6 +116,9 @@ func (s *Server) UpdateTask(ctx context.Context, req *v1alpha1.UpdateTaskRequest
 	if err := v1alpha1.ValidateTask(task); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	// Status is controller-owned observed state. UpdateTask accepts desired state
+	// only; SaveTask preserves the stored status atomically when the task exists.
+	task.Status = nil
 	task.Metadata = defaultMetadata(task.Metadata, func(atespace, name string) *v1alpha1.ObjectMeta {
 		existing, err := s.store.GetTask(ctx, atespace, name)
 		if err != nil {

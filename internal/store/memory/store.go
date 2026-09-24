@@ -78,16 +78,25 @@ func (s *MemoryStore) SaveTask(ctx context.Context, task *v1alpha1.Task) error {
 	if task.Metadata.Atespace == "" {
 		task.Metadata.Atespace = "default"
 	}
-	if task.Status == nil {
-		task.Status = &v1alpha1.TaskStatus{}
-	}
-	if task.Status.Phase == "" {
-		task.Status.Phase = "Pending"
-	}
-
 	key := taskKey(task.Metadata.Atespace, task.Metadata.Name)
 
 	s.mu.Lock()
+	// Desired-state writes must not overwrite controller-owned observed state.
+	// Preserve status while holding the same lock that replaces the task.
+	if existing, ok := s.tasks[key]; ok {
+		if existing.Status != nil {
+			task.Status = clone(existing.Status)
+		} else {
+			task.Status = &v1alpha1.TaskStatus{}
+		}
+	} else {
+		if task.Status == nil {
+			task.Status = &v1alpha1.TaskStatus{}
+		}
+		if task.Status.Phase == "" {
+			task.Status.Phase = "Pending"
+		}
+	}
 	cp := clone(task)
 	s.tasks[key] = cp
 

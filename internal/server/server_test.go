@@ -148,14 +148,33 @@ func TestServerGRPC(t *testing.T) {
 		t.Errorf("expected creation timestamp on listed task")
 	}
 
-	// Test UpdateTask
+	// Test UpdateTask. Status is controller-owned: a normal reapply with no
+	// status preserves it, and client-supplied status cannot overwrite it.
+	controllerStatus := &v1alpha1.TaskStatus{Phase: "Running", Id: "controller-id"}
+	if err := memStore.UpdateTaskStatus(ctx, "default", "grpc-task", controllerStatus); err != nil {
+		t.Fatalf("UpdateTaskStatus failed: %v", err)
+	}
+
 	task.Spec.Image = "ghcr.io/test/updated-image"
+	task.Status = nil
 	updatedTask, err := client.UpdateTask(ctx, &v1alpha1.UpdateTaskRequest{Task: task})
 	if err != nil {
 		t.Fatalf("UpdateTask failed: %v", err)
 	}
 	if updatedTask.Spec.Image != "ghcr.io/test/updated-image" {
 		t.Errorf("expected image 'ghcr.io/test/updated-image', got %s", updatedTask.Spec.Image)
+	}
+	if updatedTask.GetStatus().GetPhase() != "Running" || updatedTask.GetStatus().GetId() != "controller-id" {
+		t.Errorf("expected controller status to survive reapply, got %v", updatedTask.GetStatus())
+	}
+
+	updatedTask.Status = &v1alpha1.TaskStatus{Phase: "Failed", Id: "client-id"}
+	updatedTask, err = client.UpdateTask(ctx, &v1alpha1.UpdateTaskRequest{Task: updatedTask})
+	if err != nil {
+		t.Fatalf("UpdateTask with client status failed: %v", err)
+	}
+	if updatedTask.GetStatus().GetPhase() != "Running" || updatedTask.GetStatus().GetId() != "controller-id" {
+		t.Errorf("expected client status to be ignored, got %v", updatedTask.GetStatus())
 	}
 
 	// 4. Suspend & Resume Task

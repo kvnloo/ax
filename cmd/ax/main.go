@@ -39,58 +39,87 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// globalFlags holds the ax CLI's global flag values.
+type globalFlags struct {
+	atespace       string
+	explicitServer string
+	kubeContext    string
+	axNamespace    string
+}
+
+// parseGlobalFlags splits args into the command name, global flag values,
+// and the remaining command args. Flags may appear before or after the
+// command, as before. Two fixes over the old inline loop in main:
+//   - a value flag with no following value is an error; the old code
+//     silently dropped a trailing -a/--server/--context/-n, so
+//     "ax get tasks -a" ran against the default atespace with no error.
+//   - "--" ends flag parsing: everything from "--" on is passed through
+//     verbatim. The old loop kept consuming flags after "--", so
+//     "ax ssh mytask -- -a" silently dropped the "-a" and opened /bin/sh
+//     instead of running the "-a" command.
+func parseGlobalFlags(args []string) (string, globalFlags, []string, error) {
+	flags := globalFlags{atespace: "default", axNamespace: "ax-system"}
+	var cmd string
+	var cleanArgs []string
+	// valueFlag consumes the flag's value or errors when none follows.
+	valueFlag := func(arg string, i int, set func(string)) (int, error) {
+		if i+1 >= len(args) {
+			return i, fmt.Errorf("flag %s requires a value", arg)
+		}
+		set(args[i+1])
+		return i + 1, nil
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			cleanArgs = append(cleanArgs, args[i:]...)
+			break
+		}
+		var err error
+		switch {
+		case arg == "-a" || arg == "--atespace":
+			i, err = valueFlag(arg, i, func(v string) { flags.atespace = v })
+		case strings.HasPrefix(arg, "--atespace="):
+			flags.atespace = strings.TrimPrefix(arg, "--atespace=")
+		case arg == "--server":
+			i, err = valueFlag(arg, i, func(v string) { flags.explicitServer = v })
+		case strings.HasPrefix(arg, "--server="):
+			flags.explicitServer = strings.TrimPrefix(arg, "--server=")
+		case arg == "--context":
+			i, err = valueFlag(arg, i, func(v string) { flags.kubeContext = v })
+		case strings.HasPrefix(arg, "--context="):
+			flags.kubeContext = strings.TrimPrefix(arg, "--context=")
+		case arg == "-n" || arg == "--namespace":
+			i, err = valueFlag(arg, i, func(v string) { flags.axNamespace = v })
+		case strings.HasPrefix(arg, "--namespace="):
+			flags.axNamespace = strings.TrimPrefix(arg, "--namespace=")
+		case cmd == "" && !strings.HasPrefix(arg, "-"):
+			cmd = arg
+		default:
+			cleanArgs = append(cleanArgs, arg)
+		}
+		if err != nil {
+			return "", flags, nil, err
+		}
+	}
+	return cmd, flags, cleanArgs, nil
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
 	}
 
-	var (
-		cmd            string
-		cleanArgs      []string
-		atespace       = "default"
-		explicitServer = ""
-		kubeContext    = ""
-		axNamespace    = "ax-system"
-	)
-
-	args := os.Args[1:]
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "-a" || arg == "--atespace" {
-			if i+1 < len(args) {
-				atespace = args[i+1]
-				i++
-			}
-		} else if strings.HasPrefix(arg, "--atespace=") {
-			atespace = strings.TrimPrefix(arg, "--atespace=")
-		} else if arg == "--server" {
-			if i+1 < len(args) {
-				explicitServer = args[i+1]
-				i++
-			}
-		} else if strings.HasPrefix(arg, "--server=") {
-			explicitServer = strings.TrimPrefix(arg, "--server=")
-		} else if arg == "--context" {
-			if i+1 < len(args) {
-				kubeContext = args[i+1]
-				i++
-			}
-		} else if strings.HasPrefix(arg, "--context=") {
-			kubeContext = strings.TrimPrefix(arg, "--context=")
-		} else if arg == "-n" || arg == "--namespace" {
-			if i+1 < len(args) {
-				axNamespace = args[i+1]
-				i++
-			}
-		} else if strings.HasPrefix(arg, "--namespace=") {
-			axNamespace = strings.TrimPrefix(arg, "--namespace=")
-		} else if cmd == "" && !strings.HasPrefix(arg, "-") {
-			cmd = arg
-		} else {
-			cleanArgs = append(cleanArgs, arg)
-		}
+	cmd, flags, cleanArgs, err := parseGlobalFlags(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
+	atespace := flags.atespace
+	explicitServer := flags.explicitServer
+	kubeContext := flags.kubeContext
+	axNamespace := flags.axNamespace
 
 	if cmd == "" {
 		printUsage()

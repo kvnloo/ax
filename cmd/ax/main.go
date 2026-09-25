@@ -175,18 +175,18 @@ Available Commands:
   get workspace <name>    Get a specific workspace
   get models              List models
   get model <name>        Get a specific model
-  describe task <name>    Show detailed information about a task
-  describe gateway <name> Show detailed information about a gateway
-  describe workspace <name> Show detailed information about a workspace
-  describe model <name>   Show detailed information about a model
-  watch task <name>       Stream live status and condition updates for a task
+  describe task <name>    Show detailed information about a task (plural form also accepted)
+  describe gateway <name> Show detailed information about a gateway (plural form also accepted)
+  describe workspace <name> Show detailed information about a workspace (plural form also accepted)
+  describe model <name>   Show detailed information about a model (plural form also accepted)
+  watch [task] <name>     Stream live status and condition updates for a task
   ssh <task-name> [-- cmd] Run a command or shell inside the running task container
   suspend task <name>     Suspend execution of a task and checkpoint state
   resume task <name>      Resume execution of a suspended task
-  delete task <name>      Delete a task
-  delete gateway <name>   Delete a gateway
-  delete workspace <name> Delete a workspace
-  delete model <name>     Delete a model
+  delete task <name>      Delete a task (plural form also accepted)
+  delete gateway <name>   Delete a gateway (plural form also accepted)
+  delete workspace <name> Delete a workspace (plural form also accepted)
+  delete model <name>     Delete a model (plural form also accepted)
   ctx, context            Show active Kubernetes context and AX connection
   tunnel <list|stop>      Manage background tunnels to Kubernetes clusters
   version                 Print AX version
@@ -564,7 +564,7 @@ func runGet(serverURL, atespace string, args []string) error {
 
 func runDescribe(serverURL, atespace string, args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: ax describe <task|gateway|workspace|model> <name>")
+		return fmt.Errorf("usage: ax describe <task|tasks|gateway|gateways|workspace|workspaces|model|models> <name>")
 	}
 	kind := strings.ToLower(args[0])
 	name := args[1]
@@ -773,7 +773,7 @@ func runDescribe(serverURL, atespace string, args []string) error {
 
 func runWatch(serverURL, atespace string, args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: ax watch task <name>")
+		return fmt.Errorf("usage: ax watch [task] <name>")
 	}
 	name := args[1]
 
@@ -827,7 +827,7 @@ func runWatch(serverURL, atespace string, args []string) error {
 // runDelete removes one resource by kind and name.
 func runDelete(serverURL, atespace string, args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: ax delete <task|gateway|workspace|model> <name>")
+		return fmt.Errorf("usage: ax delete <task|tasks|gateway|gateways|workspace|workspaces|model|models> <name>")
 	}
 	kind, err := normalizeKind(args[0])
 	if err != nil {

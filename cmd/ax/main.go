@@ -1115,6 +1115,19 @@ func runTunnel(args []string) error {
 	}
 }
 
+// sshTargetActor builds the "atespace/actor" dial target for the guest
+// session. Task metadata is nil-checked: the server may return a task
+// without metadata, and dereferencing task.Metadata here panicked the CLI
+// after a successful GetTask. (Every other Metadata access in the CLI
+// nil-checks first; runSSH was the only one that didn't.)
+func sshTargetActor(task *v1alpha1.Task) string {
+	atespace := ""
+	if task.Metadata != nil {
+		atespace = task.Metadata.Atespace
+	}
+	return fmt.Sprintf("%s/%s", atespace, task.Status.Actor)
+}
+
 func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: ax ssh <task-name> [-- command...]")
@@ -1179,7 +1192,7 @@ func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 		}
 	}
 
-	targetActor := fmt.Sprintf("%s/%s", task.Metadata.Atespace, task.Status.Actor)
+	targetActor := sshTargetActor(task)
 	var (
 		guestClient *guest.Client
 		cleanup     func()

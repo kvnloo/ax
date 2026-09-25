@@ -944,27 +944,48 @@ func normalizeKind(kind string) (string, error) {
 }
 
 // manifestFromArgs returns the manifest named by -f/--file (or stdin for "-").
-// ok is false when no -f flag is present.
+// ok is false when no -f flag is present. Any argument that is not a manifest
+// flag (or its value) is an error: apply used to silently ignore extra
+// positionals, so "ax apply -f a.yaml b.yaml" applied only a.yaml.
 func manifestFromArgs(args []string) (data []byte, ok bool, err error) {
+	var path string
+	seen := false
 	for i := 0; i < len(args); i++ {
-		if args[i] != "-f" && args[i] != "--file" {
+		arg := args[i]
+		if arg == "-f" || arg == "--file" {
+			if i+1 >= len(args) {
+				return nil, true, errors.New("-f requires a file path (or - for stdin)")
+			}
+			if seen {
+				return nil, true, errors.New("specify only one manifest file")
+			}
+			seen = true
+			path = args[i+1]
+			i++ // consume the value
 			continue
 		}
-		if i+1 >= len(args) {
-			return nil, true, errors.New("-f requires a file path (or - for stdin)")
+		if p, matched := strings.CutPrefix(arg, "--file="); matched {
+			if seen {
+				return nil, true, errors.New("specify only one manifest file")
+			}
+			seen = true
+			path = p
+			continue
 		}
-		path := args[i+1]
-		if path == "-" {
-			data, err = io.ReadAll(os.Stdin)
-		} else {
-			data, err = os.ReadFile(path)
-		}
-		if err != nil {
-			return nil, true, fmt.Errorf("reading %s: %w", path, err)
-		}
-		return data, true, nil
+		return nil, true, fmt.Errorf("unexpected argument %q", arg)
 	}
-	return nil, false, nil
+	if !seen {
+		return nil, false, nil
+	}
+	if path == "-" {
+		data, err = io.ReadAll(os.Stdin)
+	} else {
+		data, err = os.ReadFile(path)
+	}
+	if err != nil {
+		return nil, true, fmt.Errorf("reading %s: %w", path, err)
+	}
+	return data, true, nil
 }
 
 func runSuspend(serverURL, atespace string, args []string) error {

@@ -338,8 +338,8 @@ func applyOutcome(lookupErr error, existingSpec, newSpec proto.Message) (string,
 }
 
 func runGet(serverURL, atespace string, args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("specify resource to get (e.g. 'ax get tasks' or 'ax get task <name>')")
+	if err := checkGetArgs(args); err != nil {
+		return err
 	}
 
 	resource := strings.ToLower(args[0])
@@ -563,8 +563,8 @@ func runGet(serverURL, atespace string, args []string) error {
 }
 
 func runDescribe(serverURL, atespace string, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: ax describe <task|gateway|workspace|model> <name>")
+	if err := checkDescribeArgs(args); err != nil {
+		return err
 	}
 	kind := strings.ToLower(args[0])
 	name := args[1]
@@ -772,8 +772,8 @@ func runDescribe(serverURL, atespace string, args []string) error {
 }
 
 func runWatch(serverURL, atespace string, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: ax watch task <name>")
+	if err := checkWatchArgs(args); err != nil {
+		return err
 	}
 	name := args[1]
 
@@ -826,8 +826,8 @@ func runWatch(serverURL, atespace string, args []string) error {
 
 // runDelete removes one resource by kind and name.
 func runDelete(serverURL, atespace string, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: ax delete <task|gateway|workspace|model> <name>")
+	if err := checkDeleteArgs(args); err != nil {
+		return err
 	}
 	kind, err := normalizeKind(args[0])
 	if err != nil {
@@ -943,6 +943,65 @@ func normalizeKind(kind string) (string, error) {
 	}
 }
 
+// rejectExtraArgs errors when args carries more positionals than the command
+// accepts. Silently dropping a trailing name on a mutating command
+// (suspend/resume/delete) is a footgun — kubectl errors the same way — and on
+// read commands a dropped arg is almost always a typo for the name.
+func rejectExtraArgs(args []string, want int) error {
+	if len(args) > want {
+		return fmt.Errorf("unexpected argument %q", args[want])
+	}
+	return nil
+}
+
+// checkGetArgs validates positional arity for `ax get [<kind> [<name>]]`.
+func checkGetArgs(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("specify resource to get (e.g. 'ax get tasks' or 'ax get task <name>')")
+	}
+	return rejectExtraArgs(args, 2)
+}
+
+// checkDescribeArgs validates positional arity for `ax describe <kind> <name>`.
+func checkDescribeArgs(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: ax describe <task|gateway|workspace|model> <name>")
+	}
+	return rejectExtraArgs(args, 2)
+}
+
+// checkDeleteArgs validates positional arity for `ax delete <kind> <name>`.
+func checkDeleteArgs(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: ax delete <task|gateway|workspace|model> <name>")
+	}
+	return rejectExtraArgs(args, 2)
+}
+
+// checkWatchArgs validates positional arity for `ax watch task <name>`.
+func checkWatchArgs(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: ax watch task <name>")
+	}
+	return rejectExtraArgs(args, 2)
+}
+
+// checkSuspendArgs validates positional arity for `ax suspend [task] <name>`.
+// checkResumeArgs is the same shape for resume.
+func checkSuspendArgs(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: ax suspend task <name>")
+	}
+	return rejectExtraArgs(args, 2)
+}
+
+func checkResumeArgs(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: ax resume task <name>")
+	}
+	return rejectExtraArgs(args, 2)
+}
+
 // manifestFromArgs returns the manifest named by -f/--file (or stdin for "-").
 // ok is false when no -f flag is present.
 func manifestFromArgs(args []string) (data []byte, ok bool, err error) {
@@ -968,6 +1027,9 @@ func manifestFromArgs(args []string) (data []byte, ok bool, err error) {
 }
 
 func runSuspend(serverURL, atespace string, args []string) error {
+	if err := checkSuspendArgs(args); err != nil {
+		return err
+	}
 	name := ""
 	if len(args) == 1 {
 		name = args[0]
@@ -999,6 +1061,9 @@ func runSuspend(serverURL, atespace string, args []string) error {
 }
 
 func runResume(serverURL, atespace string, args []string) error {
+	if err := checkResumeArgs(args); err != nil {
+		return err
+	}
 	name := ""
 	if len(args) == 1 {
 		name = args[0]

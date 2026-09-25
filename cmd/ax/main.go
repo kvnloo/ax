@@ -562,12 +562,28 @@ func runGet(serverURL, atespace string, args []string) error {
 	return fmt.Errorf("unknown resource %q", resource)
 }
 
-func runDescribe(serverURL, atespace string, args []string) error {
+// parseDescribeArgs validates the kind up front and returns the canonical
+// kind. Base fell through to GetTask for ANY unrecognized kind, so
+// `ax describe banana foo` silently described task foo.
+func parseDescribeArgs(args []string) (kind, name string, err error) {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: ax describe <task|gateway|workspace|model> <name>")
+		return "", "", fmt.Errorf("usage: ax describe <task|gateway|workspace|model> <name>")
 	}
-	kind := strings.ToLower(args[0])
-	name := args[1]
+	if len(args) > 2 {
+		return "", "", fmt.Errorf("too many arguments for ax describe (usage: ax describe <task|gateway|workspace|model> <name>)")
+	}
+	kind, err = normalizeKind(args[0])
+	if err != nil {
+		return "", "", err
+	}
+	return kind, args[1], nil
+}
+
+func runDescribe(serverURL, atespace string, args []string) error {
+	kind, name, err := parseDescribeArgs(args)
+	if err != nil {
+		return err
+	}
 
 	client, conn, err := getAXClient(serverURL)
 	if err != nil {
@@ -578,7 +594,7 @@ func runDescribe(serverURL, atespace string, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if kind == "model" || kind == "models" {
+	if kind == v1alpha1.KindModel {
 		m, err := client.GetModel(ctx, &v1alpha1.GetModelRequest{Atespace: atespace, Name: name})
 		if err != nil {
 			return fmt.Errorf("getting model %q: %w", name, err)
@@ -619,7 +635,7 @@ func runDescribe(serverURL, atespace string, args []string) error {
 		return nil
 	}
 
-	if kind == "workspace" || kind == "workspaces" {
+	if kind == v1alpha1.KindWorkspace {
 		ws, err := client.GetWorkspace(ctx, &v1alpha1.GetWorkspaceRequest{Atespace: atespace, Name: name})
 		if err != nil {
 			return fmt.Errorf("getting workspace %q: %w", name, err)
@@ -677,7 +693,7 @@ func runDescribe(serverURL, atespace string, args []string) error {
 		return nil
 	}
 
-	if kind == "gateway" || kind == "gateways" {
+	if kind == v1alpha1.KindGateway {
 		gw, err := client.GetGateway(ctx, &v1alpha1.GetGatewayRequest{Atespace: atespace, Name: name})
 		if err != nil {
 			return fmt.Errorf("getting gateway %q: %w", name, err)

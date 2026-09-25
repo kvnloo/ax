@@ -967,18 +967,30 @@ func manifestFromArgs(args []string) (data []byte, ok bool, err error) {
 	return nil, false, nil
 }
 
-func runSuspend(serverURL, atespace string, args []string) error {
-	name := ""
-	if len(args) == 1 {
-		name = args[0]
-	} else if len(args) >= 2 {
+// parseSuspendArgs resolves the task name for suspend/resume.
+// Accepted forms: <name> or task|tasks <name>. Any further argument is an
+// error — callers must not silently drop trailing args (a dropped name on a
+// mutating command is a footgun).
+func parseSuspendArgs(args []string) (string, error) {
+	switch len(args) {
+	case 0:
+		return "", errors.New("usage: ax suspend [task] <name>")
+	case 1:
+		return args[0], nil
+	case 2:
 		if args[0] == "task" || args[0] == "tasks" {
-			name = args[1]
-		} else {
-			name = args[0]
+			return args[1], nil
 		}
-	} else {
-		return fmt.Errorf("usage: ax suspend task <name>")
+		return "", fmt.Errorf("unexpected argument %q", args[1])
+	default:
+		return "", fmt.Errorf("unexpected argument %q", args[2])
+	}
+}
+
+func runSuspend(serverURL, atespace string, args []string) error {
+	name, err := parseSuspendArgs(args)
+	if err != nil {
+		return err
 	}
 
 	client, conn, err := getAXClient(serverURL)
@@ -999,17 +1011,9 @@ func runSuspend(serverURL, atespace string, args []string) error {
 }
 
 func runResume(serverURL, atespace string, args []string) error {
-	name := ""
-	if len(args) == 1 {
-		name = args[0]
-	} else if len(args) >= 2 {
-		if args[0] == "task" || args[0] == "tasks" {
-			name = args[1]
-		} else {
-			name = args[0]
-		}
-	} else {
-		return fmt.Errorf("usage: ax resume task <name>")
+	name, err := parseSuspendArgs(args)
+	if err != nil {
+		return err
 	}
 
 	client, conn, err := getAXClient(serverURL)

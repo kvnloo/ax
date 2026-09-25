@@ -927,7 +927,7 @@ func waitForDeletion(ctx context.Context, client v1alpha1.AXClient, kind, atespa
 // normalizeKind maps user-typed kinds ("task", "tasks", "Task") to the canonical
 // manifest kind, rejecting anything unknown.
 func normalizeKind(kind string) (string, error) {
-	switch strings.ToLower(strings.TrimSuffix(kind, "s")) {
+	switch strings.TrimSuffix(strings.ToLower(kind), "s") {
 	case "task":
 		return v1alpha1.KindTask, nil
 	case "gateway":

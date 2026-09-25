@@ -45,6 +45,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// -h/--help anywhere (before or after the command) prints usage.
+	// This runs before flag parsing so a post-command help flag is not
+	// silently swallowed by the command's own argument handling.
+	if helpRequested(os.Args[1:]) {
+		printUsage()
+		return
+	}
+
 	var (
 		cmd            string
 		cleanArgs      []string
@@ -157,6 +165,21 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// helpRequested reports whether -h/--help appears in args. Scanning stops
+// at the first "--" so a help flag inside ssh's remote-command passthrough
+// ("ax ssh mytask -- --help") is not mistaken for a CLI help request.
+func helpRequested(args []string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if a == "-h" || a == "--help" {
+			return true
+		}
+	}
+	return false
 }
 
 func printUsage() {

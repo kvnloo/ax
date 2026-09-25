@@ -168,13 +168,13 @@ Usage:
 Available Commands:
   apply -f <file>         Apply resources (tasks, gateways, workspaces, models) from a file or stdin
   get tasks               List tasks
-  get task <name>         Get a specific task
+  get task <name>         Get a specific task (plural form also accepted)
   get gateways            List gateways
-  get gateway <name>      Get a specific gateway
+  get gateway <name>      Get a specific gateway (plural form also accepted)
   get workspaces          List workspaces
-  get workspace <name>    Get a specific workspace
+  get workspace <name>    Get a specific workspace (plural form also accepted)
   get models              List models
-  get model <name>        Get a specific model
+  get model <name>        Get a specific model (plural form also accepted)
   describe task <name>    Show detailed information about a task
   describe gateway <name> Show detailed information about a gateway
   describe workspace <name> Show detailed information about a workspace

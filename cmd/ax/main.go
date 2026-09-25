@@ -1064,9 +1064,34 @@ func runContext(kubeContext string) error {
 	return nil
 }
 
-func runTunnel(args []string) error {
+// rejectExtraArgs errors when args carries more positionals than the command
+// accepts. Silently dropping a trailing name on a mutating command is a
+// footgun — kubectl errors the same way.
+func rejectExtraArgs(args []string, want int) error {
+	if len(args) > want {
+		return fmt.Errorf("unexpected argument %q", args[want])
+	}
+	return nil
+}
+
+// checkTunnelArgs validates positional arity for `ax tunnel <list|stop> [context]`.
+func checkTunnelArgs(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("specify tunnel action: 'ax tunnel list' or 'ax tunnel stop [context]'")
+	}
+	switch args[0] {
+	case "list":
+		return rejectExtraArgs(args, 1)
+	case "stop":
+		return rejectExtraArgs(args, 2)
+	default:
+		return fmt.Errorf("unknown tunnel subcommand: %s (available: list, stop)", args[0])
+	}
+}
+
+func runTunnel(args []string) error {
+	if err := checkTunnelArgs(args); err != nil {
+		return err
 	}
 
 	switch args[0] {

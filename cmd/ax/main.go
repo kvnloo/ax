@@ -947,24 +947,34 @@ func normalizeKind(kind string) (string, error) {
 // ok is false when no -f flag is present.
 func manifestFromArgs(args []string) (data []byte, ok bool, err error) {
 	for i := 0; i < len(args); i++ {
+		if p, matched := strings.CutPrefix(args[i], "--file="); matched {
+			if p == "" {
+				return nil, true, errors.New("--file requires a file path (or - for stdin)")
+			}
+			return readManifestPath(p)
+		}
 		if args[i] != "-f" && args[i] != "--file" {
 			continue
 		}
 		if i+1 >= len(args) {
 			return nil, true, errors.New("-f requires a file path (or - for stdin)")
 		}
-		path := args[i+1]
-		if path == "-" {
-			data, err = io.ReadAll(os.Stdin)
-		} else {
-			data, err = os.ReadFile(path)
-		}
-		if err != nil {
-			return nil, true, fmt.Errorf("reading %s: %w", path, err)
-		}
-		return data, true, nil
+		return readManifestPath(args[i+1])
 	}
 	return nil, false, nil
+}
+
+// readManifestPath reads a manifest from path ("-" means stdin).
+func readManifestPath(path string) (data []byte, ok bool, err error) {
+	if path == "-" {
+		data, err = io.ReadAll(os.Stdin)
+	} else {
+		data, err = os.ReadFile(path)
+	}
+	if err != nil {
+		return nil, true, fmt.Errorf("reading %s: %w", path, err)
+	}
+	return data, true, nil
 }
 
 func runSuspend(serverURL, atespace string, args []string) error {

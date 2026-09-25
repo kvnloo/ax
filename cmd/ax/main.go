@@ -163,26 +163,26 @@ func printUsage() {
 	fmt.Println(`AX CLI - Autonomous agent execution control
 
 Usage:
-  ax [command] [flags]
+  ax [flags] [command] [args]
 
 Available Commands:
-  apply -f <file>         Apply resources (tasks, gateways, workspaces, models) from a file or stdin
-  get tasks               List tasks
-  get task <name>         Get a specific task
-  get gateways            List gateways
-  get gateway <name>      Get a specific gateway
-  get workspaces          List workspaces
-  get workspace <name>    Get a specific workspace
-  get models              List models
-  get model <name>        Get a specific model
+  apply -f <file>           Apply resources (tasks, gateways, workspaces, models) from a file or stdin
+  get tasks|task             List tasks (the singular form lists too)
+  get task <name>           Get a specific task
+  get gateways|gateway       List gateways (the singular form lists too)
+  get gateway <name>        Get a specific gateway
+  get workspaces|workspace   List workspaces (the singular form lists too)
+  get workspace <name>      Get a specific workspace
+  get models|model           List models (the singular form lists too)
+  get model <name>          Get a specific model
   describe task <name>    Show detailed information about a task
   describe gateway <name> Show detailed information about a gateway
   describe workspace <name> Show detailed information about a workspace
   describe model <name>   Show detailed information about a model
   watch task <name>       Stream live status and condition updates for a task
   ssh <task-name> [-- cmd] Run a command or shell inside the running task container
-  suspend task <name>     Suspend execution of a task and checkpoint state
-  resume task <name>      Resume execution of a suspended task
+  suspend [task] <name>   Suspend execution of a task and checkpoint state
+  resume [task] <name>    Resume execution of a suspended task
   delete task <name>      Delete a task
   delete gateway <name>   Delete a gateway
   delete workspace <name> Delete a workspace
@@ -978,7 +978,7 @@ func runSuspend(serverURL, atespace string, args []string) error {
 			name = args[0]
 		}
 	} else {
-		return fmt.Errorf("usage: ax suspend task <name>")
+		return fmt.Errorf("usage: ax suspend [task] <name>")
 	}
 
 	client, conn, err := getAXClient(serverURL)
@@ -1009,7 +1009,7 @@ func runResume(serverURL, atespace string, args []string) error {
 			name = args[0]
 		}
 	} else {
-		return fmt.Errorf("usage: ax resume task <name>")
+		return fmt.Errorf("usage: ax resume [task] <name>")
 	}
 
 	client, conn, err := getAXClient(serverURL)

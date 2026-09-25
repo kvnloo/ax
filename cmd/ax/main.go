@@ -100,12 +100,20 @@ func main() {
 	// Commands that don't require an AX server connection
 	switch cmd {
 	case "version":
+		if err := rejectUnexpectedFlags(cleanArgs); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 		fmt.Println("ax version v1alpha1 (standalone redis engine)")
 		return
 	case "help", "-h", "--help":
 		printUsage()
 		return
 	case "ctx", "context":
+		if err := rejectUnexpectedFlags(cleanArgs); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 		if err := runContext(kubeContext); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -341,6 +349,9 @@ func runGet(serverURL, atespace string, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("specify resource to get (e.g. 'ax get tasks' or 'ax get task <name>')")
 	}
+	if err := rejectUnexpectedFlags(args); err != nil {
+		return err
+	}
 
 	resource := strings.ToLower(args[0])
 
@@ -566,6 +577,9 @@ func runDescribe(serverURL, atespace string, args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: ax describe <task|gateway|workspace|model> <name>")
 	}
+	if err := rejectUnexpectedFlags(args); err != nil {
+		return err
+	}
 	kind := strings.ToLower(args[0])
 	name := args[1]
 
@@ -775,6 +789,9 @@ func runWatch(serverURL, atespace string, args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: ax watch task <name>")
 	}
+	if err := rejectUnexpectedFlags(args); err != nil {
+		return err
+	}
 	name := args[1]
 
 	client, conn, err := getAXClient(serverURL)
@@ -828,6 +845,9 @@ func runWatch(serverURL, atespace string, args []string) error {
 func runDelete(serverURL, atespace string, args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: ax delete <task|gateway|workspace|model> <name>")
+	}
+	if err := rejectUnexpectedFlags(args); err != nil {
+		return err
 	}
 	kind, err := normalizeKind(args[0])
 	if err != nil {
@@ -924,6 +944,24 @@ func waitForDeletion(ctx context.Context, client v1alpha1.AXClient, kind, atespa
 	}
 }
 
+// rejectUnexpectedFlags errors on dash-led arguments that a command does not
+// understand. A lone "-" (the stdin convention) and anything after a "--"
+// separator pass through untouched, so "ax ssh mytask -- ls" keeps working.
+func rejectUnexpectedFlags(args []string) error {
+	for _, a := range args {
+		if a == "--" {
+			return nil
+		}
+		if a == "-" {
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			return fmt.Errorf("unexpected flag %q (see 'ax help')", a)
+		}
+	}
+	return nil
+}
+
 // normalizeKind maps user-typed kinds ("task", "tasks", "Task") to the canonical
 // manifest kind, rejecting anything unknown.
 func normalizeKind(kind string) (string, error) {
@@ -946,6 +984,17 @@ func normalizeKind(kind string) (string, error) {
 // manifestFromArgs returns the manifest named by -f/--file (or stdin for "-").
 // ok is false when no -f flag is present.
 func manifestFromArgs(args []string) (data []byte, ok bool, err error) {
+	// Reject unknown flags anywhere in the arg list before looking for -f,
+	// so "ax apply -f x.yaml --bogus" cannot silently drop the bogus flag.
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-f" || args[i] == "--file" {
+			i++ // skip the file path (or "-" for stdin)
+			continue
+		}
+		if args[i] != "-" && strings.HasPrefix(args[i], "-") {
+			return nil, false, fmt.Errorf("unexpected flag %q (see 'ax help')", args[i])
+		}
+	}
 	for i := 0; i < len(args); i++ {
 		if args[i] != "-f" && args[i] != "--file" {
 			continue
@@ -968,6 +1017,9 @@ func manifestFromArgs(args []string) (data []byte, ok bool, err error) {
 }
 
 func runSuspend(serverURL, atespace string, args []string) error {
+	if err := rejectUnexpectedFlags(args); err != nil {
+		return err
+	}
 	name := ""
 	if len(args) == 1 {
 		name = args[0]
@@ -999,6 +1051,9 @@ func runSuspend(serverURL, atespace string, args []string) error {
 }
 
 func runResume(serverURL, atespace string, args []string) error {
+	if err := rejectUnexpectedFlags(args); err != nil {
+		return err
+	}
 	name := ""
 	if len(args) == 1 {
 		name = args[0]
@@ -1071,6 +1126,9 @@ func runTunnel(args []string) error {
 
 	switch args[0] {
 	case "list":
+		if err := rejectUnexpectedFlags(args[1:]); err != nil {
+			return err
+		}
 		tunnels, err := tunnel.ListTunnels()
 		if err != nil {
 			return err
@@ -1092,6 +1150,9 @@ func runTunnel(args []string) error {
 		return w.Flush()
 
 	case "stop":
+		if err := rejectUnexpectedFlags(args[1:]); err != nil {
+			return err
+		}
 		if len(args) > 1 {
 			ctxName := args[1]
 			if err := tunnel.StopTunnelByContext(ctxName); err != nil {
@@ -1121,6 +1182,11 @@ func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 	}
 
 	taskName := args[0]
+	// The task name position must not be a flag; the command passthrough
+	// after the name (optionally past "--") is intentionally untouched.
+	if taskName != "-" && strings.HasPrefix(taskName, "-") {
+		return fmt.Errorf("unexpected flag %q (see 'ax help')", taskName)
+	}
 	var cmdToRun []string
 	for i := 1; i < len(args); i++ {
 		if args[i] == "--" {

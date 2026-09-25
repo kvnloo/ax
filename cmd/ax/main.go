@@ -771,11 +771,35 @@ func runDescribe(serverURL, atespace string, args []string) error {
 	return nil
 }
 
-func runWatch(serverURL, atespace string, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: ax watch task <name>")
+// parseWatchArgs extracts the watched task name. watch streams only tasks, so
+// the kind word is optional: `ax watch mytask` works like suspend/resume's
+// bare-name form. A two-arg form with a non-task kind is rejected instead of
+// being silently ignored (base used args[1] regardless of args[0]).
+func parseWatchArgs(args []string) (string, error) {
+	switch len(args) {
+	case 0:
+		return "", fmt.Errorf("usage: ax watch [task] <name>")
+	case 1:
+		return args[0], nil
+	case 2:
+		kind, err := normalizeKind(args[0])
+		if err != nil {
+			return "", err
+		}
+		if kind != v1alpha1.KindTask {
+			return "", fmt.Errorf("ax watch only supports tasks (got kind %q)", args[0])
+		}
+		return args[1], nil
+	default:
+		return "", fmt.Errorf("too many arguments for ax watch (usage: ax watch [task] <name>)")
 	}
-	name := args[1]
+}
+
+func runWatch(serverURL, atespace string, args []string) error {
+	name, err := parseWatchArgs(args)
+	if err != nil {
+		return err
+	}
 
 	client, conn, err := getAXClient(serverURL)
 	if err != nil {

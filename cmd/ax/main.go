@@ -100,12 +100,20 @@ func main() {
 	// Commands that don't require an AX server connection
 	switch cmd {
 	case "version":
+		if err := rejectExtraArgs(cleanArgs); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 		fmt.Println("ax version v1alpha1 (standalone redis engine)")
 		return
 	case "help", "-h", "--help":
 		printUsage()
 		return
 	case "ctx", "context":
+		if err := rejectExtraArgs(cleanArgs); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 		if err := runContext(kubeContext); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -157,6 +165,17 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// rejectExtraArgs errors when a command that takes no positional arguments
+// receives any. version and ctx were the last two commands silently dropping
+// extras: "ax ctx prod" looked like a context switch but only displayed the
+// current context.
+func rejectExtraArgs(args []string) error {
+	if len(args) > 0 {
+		return fmt.Errorf("unexpected argument %q", args[0])
+	}
+	return nil
 }
 
 func printUsage() {

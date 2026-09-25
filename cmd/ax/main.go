@@ -950,10 +950,14 @@ func manifestFromArgs(args []string) (data []byte, ok bool, err error) {
 		if args[i] != "-f" && args[i] != "--file" {
 			continue
 		}
+		if ok {
+			return nil, true, errors.New("duplicate -f/--file flag: specify only one manifest file (use - for stdin)")
+		}
 		if i+1 >= len(args) {
 			return nil, true, errors.New("-f requires a file path (or - for stdin)")
 		}
 		path := args[i+1]
+		i++ // skip the consumed path
 		if path == "-" {
 			data, err = io.ReadAll(os.Stdin)
 		} else {
@@ -962,9 +966,9 @@ func manifestFromArgs(args []string) (data []byte, ok bool, err error) {
 		if err != nil {
 			return nil, true, fmt.Errorf("reading %s: %w", path, err)
 		}
-		return data, true, nil
+		ok = true
 	}
-	return nil, false, nil
+	return data, ok, nil
 }
 
 func runSuspend(serverURL, atespace string, args []string) error {

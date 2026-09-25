@@ -45,52 +45,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	var (
-		cmd            string
-		cleanArgs      []string
-		atespace       = "default"
-		explicitServer = ""
-		kubeContext    = ""
-		axNamespace    = "ax-system"
-	)
-
-	args := os.Args[1:]
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "-a" || arg == "--atespace" {
-			if i+1 < len(args) {
-				atespace = args[i+1]
-				i++
-			}
-		} else if strings.HasPrefix(arg, "--atespace=") {
-			atespace = strings.TrimPrefix(arg, "--atespace=")
-		} else if arg == "--server" {
-			if i+1 < len(args) {
-				explicitServer = args[i+1]
-				i++
-			}
-		} else if strings.HasPrefix(arg, "--server=") {
-			explicitServer = strings.TrimPrefix(arg, "--server=")
-		} else if arg == "--context" {
-			if i+1 < len(args) {
-				kubeContext = args[i+1]
-				i++
-			}
-		} else if strings.HasPrefix(arg, "--context=") {
-			kubeContext = strings.TrimPrefix(arg, "--context=")
-		} else if arg == "-n" || arg == "--namespace" {
-			if i+1 < len(args) {
-				axNamespace = args[i+1]
-				i++
-			}
-		} else if strings.HasPrefix(arg, "--namespace=") {
-			axNamespace = strings.TrimPrefix(arg, "--namespace=")
-		} else if cmd == "" && !strings.HasPrefix(arg, "-") {
-			cmd = arg
-		} else {
-			cleanArgs = append(cleanArgs, arg)
-		}
+	cmd, gf, cleanArgs, err := parseGlobalFlags(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
+	atespace, explicitServer, kubeContext, axNamespace :=
+		gf.atespace, gf.explicitServer, gf.kubeContext, gf.axNamespace
 
 	if cmd == "" {
 		printUsage()
@@ -157,6 +118,96 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// globalFlags holds the CLI-wide flag values parsed before dispatch.
+type globalFlags struct {
+	atespace       string
+	explicitServer string
+	kubeContext    string
+	axNamespace    string
+}
+
+// parseGlobalFlags splits raw CLI args into the command word, global flag
+// values, and the remaining per-command args. It is pure (no I/O) so the
+// flag-handling rules are unit-testable.
+//
+// Rules:
+//   - Value flags (-a/--atespace, --server, --context, -n/--namespace) take
+//     their value from the next arg or an "=" suffix; the short forms also
+//     accept "-a=value". A missing value is an error (it was silently
+//     dropped before), as is an empty value or a value that looks like
+//     another flag ("-a --server=x" no longer eats "--server=x").
+//   - An unknown dash-led token before the command word is an error; after
+//     the command word it passes through for the command to reject, so
+//     "ax ssh mytask -- ls" keeps working.
+//   - "-h"/"--help" before the command word selects the help command.
+func parseGlobalFlags(args []string) (string, globalFlags, []string, error) {
+	flags := globalFlags{atespace: "default", axNamespace: "ax-system"}
+	var cmd string
+	var cleanArgs []string
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		// takeValue resolves one flag's value. hadEquals reports the
+		// "--flag=value" form, where value was already split off.
+		takeValue := func(flag, value string, hadEquals bool) (string, error) {
+			if !hadEquals {
+				if i+1 >= len(args) {
+					return "", fmt.Errorf("flag %s requires a value", flag)
+				}
+				value = args[i+1]
+				i++
+			}
+			if value == "" {
+				return "", fmt.Errorf("flag %s requires a non-empty value", flag)
+			}
+			if strings.HasPrefix(value, "-") {
+				return "", fmt.Errorf("flag %s requires a value, got %q", flag, value)
+			}
+			return value, nil
+		}
+
+		var err error
+		switch {
+		case arg == "-a" || arg == "--atespace":
+			flags.atespace, err = takeValue(arg, "", false)
+		case arg == "-n" || arg == "--namespace":
+			flags.axNamespace, err = takeValue(arg, "", false)
+		case arg == "--server" || arg == "--context":
+			v, e := takeValue(arg, "", false)
+			err = e
+			if arg == "--server" {
+				flags.explicitServer = v
+			} else {
+				flags.kubeContext = v
+			}
+		case strings.HasPrefix(arg, "--atespace="):
+			flags.atespace, err = takeValue("--atespace", strings.TrimPrefix(arg, "--atespace="), true)
+		case strings.HasPrefix(arg, "-a="):
+			flags.atespace, err = takeValue("-a", strings.TrimPrefix(arg, "-a="), true)
+		case strings.HasPrefix(arg, "--server="):
+			flags.explicitServer, err = takeValue("--server", strings.TrimPrefix(arg, "--server="), true)
+		case strings.HasPrefix(arg, "--context="):
+			flags.kubeContext, err = takeValue("--context", strings.TrimPrefix(arg, "--context="), true)
+		case strings.HasPrefix(arg, "--namespace="):
+			flags.axNamespace, err = takeValue("--namespace", strings.TrimPrefix(arg, "--namespace="), true)
+		case strings.HasPrefix(arg, "-n="):
+			flags.axNamespace, err = takeValue("-n", strings.TrimPrefix(arg, "-n="), true)
+		case (arg == "-h" || arg == "--help") && cmd == "":
+			cmd = "help"
+		case cmd == "" && !strings.HasPrefix(arg, "-"):
+			cmd = arg
+		case cmd == "" && arg != "-":
+			return "", flags, nil, fmt.Errorf("unknown flag %q", arg)
+		default:
+			cleanArgs = append(cleanArgs, arg)
+		}
+		if err != nil {
+			return "", flags, nil, err
+		}
+	}
+	return cmd, flags, cleanArgs, nil
 }
 
 func printUsage() {

@@ -357,7 +357,10 @@ func isEmptyDocument(doc *yaml.Node) bool {
 // created, configured (spec changed), or unchanged, in the style of kubectl apply.
 func applyDocument(ctx context.Context, client v1alpha1.AXClient, doc *yaml.Node) (kind, name, outcome string, err error) {
 	var head struct {
-		Kind string `yaml:"kind"`
+		Kind     string `yaml:"kind"`
+		Metadata struct {
+			Name string `yaml:"name"`
+		} `yaml:"metadata"`
 	}
 	if err := doc.Decode(&head); err != nil {
 		return "", "", "", fmt.Errorf("reading kind: %w", err)
@@ -372,6 +375,14 @@ func applyDocument(ctx context.Context, client v1alpha1.AXClient, doc *yaml.Node
 		return "", "", "", err
 	}
 	kind = normKind
+
+	// A document without metadata.name used to sail through to the server:
+	// GetTask("") missed, UpdateTask persisted a nameless record, and the
+	// CLI printed `task.ax.io/ created` for a resource with no name.
+	// kubectl rejects this client-side; so do we, before any RPC.
+	if head.Metadata.Name == "" {
+		return "", "", "", fmt.Errorf("missing metadata.name")
+	}
 
 	switch kind {
 	case v1alpha1.KindTask:

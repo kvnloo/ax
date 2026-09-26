@@ -61,7 +61,7 @@ func main() {
 	// Commands that don't require an AX server connection
 	switch cmd {
 	case "version":
-		fmt.Println("ax version v1alpha1 (standalone redis engine)")
+		fmt.Println(axVersionLine())
 		return
 	case "help", "-h", "--help":
 		printUsage()
@@ -216,6 +216,14 @@ func parseGlobalArgs(args []string) (cmd string, cleanArgs []string, atespace, e
 		}
 	}
 	return
+}
+
+// axVersionLine is the `ax version` output. The CLI is a gRPC client
+// against an AX server, not a bundled engine: the old "standalone redis
+// engine" line predated the client-server restructure and told users
+// debugging connection issues the opposite of the truth.
+func axVersionLine() string {
+	return "ax version v1alpha1 (AX CLI)"
 }
 
 func printUsage() {

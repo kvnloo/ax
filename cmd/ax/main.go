@@ -881,8 +881,8 @@ func runDescribeWithClient(ctx context.Context, client v1alpha1.AXClient, atespa
 		fmt.Printf("Name:               %s\n", sanitizeCell(mName))
 		fmt.Printf("Atespace:           %s\n", sanitizeCell(mAtespace))
 		if m.Spec != nil {
-			fmt.Printf("Provider:           %s\n", m.Spec.Provider)
-			fmt.Printf("Model:              %s\n", m.Spec.Model)
+			fmt.Printf("Provider:           %s\n", sanitizeCell(m.Spec.Provider))
+			fmt.Printf("Model:              %s\n", sanitizeCell(m.Spec.Model))
 			if params := m.Spec.GetParameters().AsMap(); len(params) > 0 {
 				fmt.Println("Parameters:")
 				keys := make([]string, 0, len(params))
@@ -891,16 +891,16 @@ func runDescribeWithClient(ctx context.Context, client v1alpha1.AXClient, atespa
 				}
 				sort.Strings(keys)
 				for _, k := range keys {
-					fmt.Printf("  %s: %s\n", k, formatParamValue(params[k]))
+					fmt.Printf("  %s: %s\n", sanitizeCell(k), sanitizeCell(formatParamValue(params[k])))
 				}
 			}
 			if m.Spec.SecretKey != nil {
 				if m.Spec.SecretKey.Name != "" && m.Spec.SecretKey.Key != "" && m.Spec.SecretKey.Name != m.Spec.SecretKey.Key {
-					fmt.Printf("Secret Key:         %s (key: %s)\n", m.Spec.SecretKey.Name, m.Spec.SecretKey.Key)
+					fmt.Printf("Secret Key:         %s (key: %s)\n", sanitizeCell(m.Spec.SecretKey.Name), sanitizeCell(m.Spec.SecretKey.Key))
 				} else if m.Spec.SecretKey.Key != "" {
-					fmt.Printf("Secret Key:         %s\n", m.Spec.SecretKey.Key)
+					fmt.Printf("Secret Key:         %s\n", sanitizeCell(m.Spec.SecretKey.Key))
 				} else if m.Spec.SecretKey.Name != "" {
-					fmt.Printf("Secret Key:         %s\n", m.Spec.SecretKey.Name)
+					fmt.Printf("Secret Key:         %s\n", sanitizeCell(m.Spec.SecretKey.Name))
 				}
 			}
 		}
@@ -926,27 +926,27 @@ func runDescribeWithClient(ctx context.Context, client v1alpha1.AXClient, atespa
 				fmt.Println("Git Repositories:")
 				for _, g := range ws.Spec.Git {
 					branch := displayBranch(g.Branch)
-					fmt.Printf("  - %s (%s, branch: %s)\n", g.Name, g.Repo, branch)
+					fmt.Printf("  - %s (%s, branch: %s)\n", sanitizeCell(g.Name), sanitizeCell(g.Repo), sanitizeCell(branch))
 				}
 			}
 			if ws.Spec.Mcp != nil {
 				if len(ws.Spec.Mcp.Registries) > 0 {
 					fmt.Println("MCP Registries:")
 					for _, r := range ws.Spec.Mcp.Registries {
-						fmt.Printf("  - Provider: %s, Query: %q\n", r.Provider, r.Query)
+						fmt.Printf("  - Provider: %s, Query: %q\n", sanitizeCell(r.Provider), r.Query)
 					}
 				}
 				if len(ws.Spec.Mcp.Servers) > 0 {
 					fmt.Println("MCP Servers:")
 					for _, s := range ws.Spec.Mcp.Servers {
 						if s.Endpoint != "" {
-							fmt.Printf("  - %s: %s\n", s.Name, s.Endpoint)
+							fmt.Printf("  - %s: %s\n", sanitizeCell(s.Name), sanitizeCell(s.Endpoint))
 						} else {
 							cmdLine := s.Command
 							if argLine := formatCommandLine(s.Args); argLine != "" {
 								cmdLine += " " + argLine
 							}
-							fmt.Printf("  - %s: %s\n", s.Name, cmdLine)
+							fmt.Printf("  - %s: %s\n", sanitizeCell(s.Name), sanitizeCell(cmdLine))
 						}
 					}
 				}
@@ -955,11 +955,11 @@ func runDescribeWithClient(ctx context.Context, client v1alpha1.AXClient, atespa
 				if len(ws.Spec.Skills.Registries) > 0 {
 					fmt.Println("Skill Registries:")
 					for _, r := range ws.Spec.Skills.Registries {
-						fmt.Printf("  - Provider: %s, Query: %q\n", r.Provider, r.Query)
+						fmt.Printf("  - Provider: %s, Query: %q\n", sanitizeCell(r.Provider), r.Query)
 					}
 				}
 				if ws.Spec.Skills.Path != "" {
-					fmt.Printf("Skills Path:      %s\n", ws.Spec.Skills.Path)
+					fmt.Printf("Skills Path:      %s\n", sanitizeCell(ws.Spec.Skills.Path))
 				}
 			}
 		}
@@ -985,16 +985,16 @@ func runDescribeWithClient(ctx context.Context, client v1alpha1.AXClient, atespa
 				fmt.Println("Listeners:")
 				for _, l := range gw.Spec.Listeners {
 					if p := listenerProtocol(l); p != "" {
-						fmt.Printf("  - %s: %d (%s)\n", l.Name, l.Port, p)
+						fmt.Printf("  - %s: %d (%s)\n", sanitizeCell(l.Name), l.Port, p)
 					} else {
-						fmt.Printf("  - %s: %d\n", l.Name, l.Port)
+						fmt.Printf("  - %s: %d\n", sanitizeCell(l.Name), l.Port)
 					}
 				}
 			}
 			if hosts := egressHostList(gw.GetSpec().GetEgress().GetAllowlist().GetHosts()); len(hosts) > 0 {
 				fmt.Println("Egress Allowlist:")
 				for _, host := range hosts {
-					fmt.Printf("  - %s\n", host)
+					fmt.Printf("  - %s\n", sanitizeCell(host))
 				}
 			}
 		}
@@ -1029,13 +1029,13 @@ func runDescribeWithClient(ctx context.Context, client v1alpha1.AXClient, atespa
 	fmt.Printf("Worker IP:    %s\n", displayWorkerIP(workerIP))
 	if task.Spec != nil {
 		if task.Spec.Gateway != nil {
-			fmt.Printf("Gateway:      %s\n", task.Spec.Gateway.Name)
+			fmt.Printf("Gateway:      %s\n", sanitizeCell(task.Spec.Gateway.Name))
 		}
 		if refs := task.Spec.WorkspaceRefs(); len(refs) > 0 {
 			paths := task.Spec.WorkspacePaths()
 			fmt.Println("Workspaces:")
 			for i, ref := range refs {
-				fmt.Printf("  - %s  path=%s", ref.Name, paths[i])
+				fmt.Printf("  - %s  path=%s", sanitizeCell(ref.Name), sanitizeCell(paths[i]))
 				if ref.Goal != "" {
 					fmt.Printf("  goal=%q", ref.Goal)
 				}
@@ -1043,10 +1043,10 @@ func runDescribeWithClient(ctx context.Context, client v1alpha1.AXClient, atespa
 			}
 		}
 		if task.Spec.Image != "" {
-			fmt.Printf("Image:        %s\n", task.Spec.Image)
+			fmt.Printf("Image:        %s\n", sanitizeCell(task.Spec.Image))
 		}
 		if len(task.Spec.Command) > 0 {
-			fmt.Printf("Command:      %s\n", formatCommandLine(task.Spec.Command))
+			fmt.Printf("Command:      %s\n", sanitizeCell(formatCommandLine(task.Spec.Command)))
 		}
 	}
 

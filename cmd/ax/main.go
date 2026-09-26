@@ -444,9 +444,16 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 		return fmt.Errorf("specify resource to get (e.g. 'ax get tasks' or 'ax get task <name>')")
 	}
 
-	resource := strings.ToLower(args[0])
+	// The resource position is normalized like describe/watch/delete/apply:
+	// " task", "Task" and "tasks" all route to the task kind. Matching on the
+	// raw lowercased word left `ax get " task"` failing with "unknown
+	// resource" while every sibling command accepted it.
+	resource, err := normalizeKind(args[0])
+	if err != nil {
+		return err
+	}
 
-	if (resource == "tasks" || resource == "task") && len(args) == 1 {
+	if resource == v1alpha1.KindTask && len(args) == 1 {
 		resp, err := client.ListTasks(ctx, &v1alpha1.ListTasksRequest{Atespace: atespace})
 		if err != nil {
 			return fmt.Errorf("listing tasks: %w", err)
@@ -499,7 +506,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 		return w.Flush()
 	}
 
-	if (resource == "task" || resource == "tasks") && len(args) >= 2 {
+	if resource == v1alpha1.KindTask && len(args) >= 2 {
 		if len(args) > 2 {
 			return fmt.Errorf("usage: ax get <task|tasks> <name> (unexpected extra argument %q)", args[2])
 		}
@@ -512,7 +519,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 		return yaml.NewEncoder(os.Stdout).Encode(task)
 	}
 
-	if (resource == "gateways" || resource == "gateway") && len(args) == 1 {
+	if resource == v1alpha1.KindGateway && len(args) == 1 {
 		resp, err := client.ListGateways(ctx, &v1alpha1.ListGatewaysRequest{Atespace: atespace})
 		if err != nil {
 			return fmt.Errorf("listing gateways: %w", err)
@@ -569,7 +576,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 		return w.Flush()
 	}
 
-	if (resource == "gateway" || resource == "gateways") && len(args) >= 2 {
+	if resource == v1alpha1.KindGateway && len(args) >= 2 {
 		if len(args) > 2 {
 			return fmt.Errorf("usage: ax get <gateway|gateways> <name> (unexpected extra argument %q)", args[2])
 		}
@@ -582,7 +589,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 		return yaml.NewEncoder(os.Stdout).Encode(gw)
 	}
 
-	if (resource == "workspaces" || resource == "workspace") && len(args) == 1 {
+	if resource == v1alpha1.KindWorkspace && len(args) == 1 {
 		resp, err := client.ListWorkspaces(ctx, &v1alpha1.ListWorkspacesRequest{Atespace: atespace})
 		if err != nil {
 			return fmt.Errorf("listing workspaces: %w", err)
@@ -621,7 +628,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 		return w.Flush()
 	}
 
-	if (resource == "workspace" || resource == "workspaces") && len(args) >= 2 {
+	if resource == v1alpha1.KindWorkspace && len(args) >= 2 {
 		if len(args) > 2 {
 			return fmt.Errorf("usage: ax get <workspace|workspaces> <name> (unexpected extra argument %q)", args[2])
 		}
@@ -634,7 +641,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 		return yaml.NewEncoder(os.Stdout).Encode(ws)
 	}
 
-	if (resource == "models" || resource == "model") && len(args) == 1 {
+	if resource == v1alpha1.KindModel && len(args) == 1 {
 		resp, err := client.ListModels(ctx, &v1alpha1.ListModelsRequest{Atespace: atespace})
 		if err != nil {
 			return fmt.Errorf("listing models: %w", err)
@@ -671,7 +678,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 		return w.Flush()
 	}
 
-	if (resource == "model" || resource == "models") && len(args) >= 2 {
+	if resource == v1alpha1.KindModel && len(args) >= 2 {
 		if len(args) > 2 {
 			return fmt.Errorf("usage: ax get <model|models> <name> (unexpected extra argument %q)", args[2])
 		}
@@ -684,7 +691,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 		return yaml.NewEncoder(os.Stdout).Encode(m)
 	}
 
-	return fmt.Errorf("unknown resource %q", resource)
+	return fmt.Errorf("unknown resource %q", resource) // unreachable: normalizeKind rejects unknown kinds above
 }
 
 // emptyListMessage is the "nothing to show" line for the get list views.

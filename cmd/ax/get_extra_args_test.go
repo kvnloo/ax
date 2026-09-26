@@ -42,7 +42,18 @@ func (f *getArgFake) GetModel(ctx context.Context, in *v1alpha1.GetModelRequest,
 	return &v1alpha1.Model{}, nil
 }
 
-// `ax get tasks foo` must fetch task foo, not silently list everything. The
+// `ax get " Task"` must list tasks: the resource position normalizes like
+// describe/watch/delete/apply, so whitespace and capitalization route to
+// the same kind instead of failing with "unknown resource".
+func TestGetNormalizesKindPosition(t *testing.T) {
+	fc := &getArgFake{}
+	if err := runGetWithClient(context.Background(), fc, "default", []string{" Task"}); err != nil {
+		t.Fatalf("runGetWithClient: %v", err)
+	}
+	if fc.listTaskCalls != 1 {
+		t.Errorf("expected one ListTasks call, got %d", fc.listTaskCalls)
+	}
+}
 // list branch matched `resource == "tasks"` with any arg count, shadowing the
 // get-one branch below it.
 func TestGetTasksPluralWithNameRoutesToGetOne(t *testing.T) {

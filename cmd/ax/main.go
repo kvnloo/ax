@@ -846,11 +846,41 @@ func runWatch(serverURL, atespace string, args []string) error {
 
 	fmt.Printf("Watching task %s/%s...\n", atespace, name)
 
+	return watchStreamLoop(stream, os.Stdout, atespace, name)
+}
+
+// isTerminalPhase reports whether the CLI watch loop should stop on phase.
+// The set mirrors the server's isWatchTerminal (internal/server), which ends
+// the stream on the same phases; the CLI keeps its own copy because it must
+// also decide locally — e.g. against a server that keeps streaming past a
+// terminal phase. "Terminating" was missing from this check, so such a
+// stream would hang the CLI after printing the phase line.
+func isTerminalPhase(phase string) bool {
+	switch phase {
+	case "Running", "Completed", "Failed", v1alpha1.PhaseTerminating:
+		return true
+	}
+	return false
+}
+
+// watchStream is the Recv side of the WatchTask stream, as an interface so
+// the drain loop is testable without a gRPC server.
+type watchStream interface {
+	Recv() (*v1alpha1.WatchTaskResponse, error)
+}
+
+// watchStreamLoop drains the watch stream until a terminal phase, stream end,
+// or a fatal error. A NotFound from the server (unknown task name) surfaces
+// as a clear message instead of a wrapped RPC error.
+func watchStreamLoop(stream watchStream, w io.Writer, atespace, name string) error {
 	for {
 		resp, err := stream.Recv()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
+			}
+			if status.Code(err) == codes.NotFound {
+				return fmt.Errorf("task %q not found in atespace %q", name, atespace)
 			}
 			return fmt.Errorf("receiving stream update: %w", err)
 		}
@@ -865,19 +895,18 @@ func runWatch(serverURL, atespace string, args []string) error {
 				actor = task.Status.Actor
 				workerIP = task.Status.WorkerIp
 			}
-			fmt.Printf("[%s] Phase: %-10s Actor: %-18s WorkerIP: %s\n",
+			fmt.Fprintf(w, "[%s] Phase: %-10s Actor: %-18s WorkerIP: %s\n",
 				time.Now().Format("15:04:05"),
 				phase,
 				actor,
 				workerIP,
 			)
-			if phase == "Running" || phase == "Completed" || phase == "Failed" {
-				fmt.Printf("Task reached terminal phase %q.\n", phase)
-				break
+			if isTerminalPhase(phase) {
+				fmt.Fprintf(w, "Task reached terminal phase %q.\n", phase)
+				return nil
 			}
 		}
 	}
-	return nil
 }
 
 // runDelete removes one resource by kind and name.

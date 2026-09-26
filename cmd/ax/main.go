@@ -337,7 +337,17 @@ func applyDocument(ctx context.Context, client v1alpha1.AXClient, doc *yaml.Node
 		return "", "", "", fmt.Errorf("reading kind: %w", err)
 	}
 
-	switch head.Kind {
+	// Manifest kinds are normalized the same way user-typed kinds are for
+	// get/describe/delete: "task", "Task" and "tasks" all mean the Task
+	// kind. Requiring the exact canonical spelling here rejected manifests
+	// that every other command accepts.
+	normKind, err := normalizeKind(head.Kind)
+	if err != nil {
+		return "", "", "", err
+	}
+	kind = normKind
+
+	switch kind {
 	case v1alpha1.KindTask:
 		var task v1alpha1.Task
 		if err := doc.Decode(&task); err != nil {
@@ -349,7 +359,7 @@ func applyDocument(ctx context.Context, client v1alpha1.AXClient, doc *yaml.Node
 			return "", "", "", err
 		}
 		res, err := client.UpdateTask(ctx, &v1alpha1.UpdateTaskRequest{Task: &task})
-		return head.Kind, res.GetMetadata().GetName(), outcome, err
+		return kind, res.GetMetadata().GetName(), outcome, err
 
 	case v1alpha1.KindGateway:
 		var gw v1alpha1.Gateway
@@ -362,7 +372,7 @@ func applyDocument(ctx context.Context, client v1alpha1.AXClient, doc *yaml.Node
 			return "", "", "", err
 		}
 		res, err := client.UpdateGateway(ctx, &v1alpha1.UpdateGatewayRequest{Gateway: &gw})
-		return head.Kind, res.GetMetadata().GetName(), outcome, err
+		return kind, res.GetMetadata().GetName(), outcome, err
 
 	case v1alpha1.KindWorkspace:
 		var ws v1alpha1.Workspace
@@ -375,7 +385,7 @@ func applyDocument(ctx context.Context, client v1alpha1.AXClient, doc *yaml.Node
 			return "", "", "", err
 		}
 		res, err := client.UpdateWorkspace(ctx, &v1alpha1.UpdateWorkspaceRequest{Workspace: &ws})
-		return head.Kind, res.GetMetadata().GetName(), outcome, err
+		return kind, res.GetMetadata().GetName(), outcome, err
 
 	case v1alpha1.KindModel:
 		var m v1alpha1.Model
@@ -388,12 +398,12 @@ func applyDocument(ctx context.Context, client v1alpha1.AXClient, doc *yaml.Node
 			return "", "", "", err
 		}
 		res, err := client.UpdateModel(ctx, &v1alpha1.UpdateModelRequest{Model: &m})
-		return head.Kind, res.GetMetadata().GetName(), outcome, err
+		return kind, res.GetMetadata().GetName(), outcome, err
 
-	case "":
-		return "", "", "", errors.New("missing kind")
 	default:
-		return "", "", "", fmt.Errorf("unsupported kind %q (expected Task, Gateway, Workspace, or Model)", head.Kind)
+		// Unreachable: normalizeKind rejects unknown and empty kinds above,
+		// but the switch must stay exhaustive.
+		return "", "", "", fmt.Errorf("unsupported kind %q", head.Kind)
 	}
 }
 

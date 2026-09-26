@@ -112,17 +112,41 @@ func StopTunnel(info *TunnelInfo) error {
 	if info == nil {
 		return nil
 	}
-	if info.PID > 0 {
+	if isPortForwardProcess(info.PID) {
 		// Attempt to terminate process group and single process
 		_ = syscall.Kill(-info.PID, syscall.SIGTERM)
 		_ = syscall.Kill(info.PID, syscall.SIGTERM)
 	}
+	// The state file is removed regardless: if the process is gone or is not
+	// ours, the entry is stale either way.
 
 	dir, err := TunnelDir()
 	if err == nil {
 		_ = os.Remove(filepath.Join(dir, SanitizeContext(info.Context)+".json"))
 	}
 	return nil
+}
+
+// isPortForwardProcess reports whether pid is a live process that looks like a
+// kubectl port-forward started by this tool. Tunnel state files can outlive
+// their process, and the recorded PID may since have been recycled by the OS
+// for an unrelated process, which must never be signaled.
+func isPortForwardProcess(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	if err := syscall.Kill(pid, 0); err != nil {
+		return false // not alive (or not signalable)
+	}
+	// On Linux, verify the command line before signaling. Where /proc is
+	// unavailable (other platforms) fall back to the liveness check above so
+	// behavior there is unchanged.
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return true
+	}
+	cmd := string(data)
+	return strings.Contains(cmd, "kubectl") && strings.Contains(cmd, "port-forward")
 }
 
 func StopTunnelByContext(ctxName string) error {

@@ -101,6 +101,13 @@ func (s *Server) ListTasks(ctx context.Context, req *v1alpha1.ListTasksRequest) 
 			offset = req.Offset
 		}
 	}
+	// An empty atespace means the default atespace, like the Get/Delete
+	// handlers already do: without this, `ax --atespace= get tasks` passed
+	// "" to the stores, where it is the cross-atespace wildcard, and listed
+	// every atespace instead of just "default".
+	if atespace == "" {
+		atespace = "default"
+	}
 	tasks, err := s.store.ListTasks(ctx, atespace, limit, offset)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "listing tasks: %v", err)
@@ -290,6 +297,13 @@ func (s *Server) ListGateways(ctx context.Context, req *v1alpha1.ListGatewaysReq
 	if req != nil {
 		atespace = req.Atespace
 	}
+	// An empty atespace means the default atespace, like the Get/Delete
+	// handlers already do: without this, `ax --atespace= get tasks` passed
+	// "" to the stores, where it is the cross-atespace wildcard, and listed
+	// every atespace instead of just "default".
+	if atespace == "" {
+		atespace = "default"
+	}
 	gateways, err := s.store.ListGateways(ctx, atespace)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "listing gateways: %v", err)
@@ -353,6 +367,13 @@ func (s *Server) ListWorkspaces(ctx context.Context, req *v1alpha1.ListWorkspace
 	if req != nil {
 		atespace = req.Atespace
 	}
+	// An empty atespace means the default atespace, like the Get/Delete
+	// handlers already do: without this, `ax --atespace= get tasks` passed
+	// "" to the stores, where it is the cross-atespace wildcard, and listed
+	// every atespace instead of just "default".
+	if atespace == "" {
+		atespace = "default"
+	}
 	workspaces, err := s.store.ListWorkspaces(ctx, atespace)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "listing workspaces: %v", err)
@@ -415,6 +436,13 @@ func (s *Server) ListModels(ctx context.Context, req *v1alpha1.ListModelsRequest
 	atespace := ""
 	if req != nil {
 		atespace = req.Atespace
+	}
+	// An empty atespace means the default atespace, like the Get/Delete
+	// handlers already do: without this, `ax --atespace= get tasks` passed
+	// "" to the stores, where it is the cross-atespace wildcard, and listed
+	// every atespace instead of just "default".
+	if atespace == "" {
+		atespace = "default"
 	}
 	models, err := s.store.ListModels(ctx, atespace)
 	if err != nil {

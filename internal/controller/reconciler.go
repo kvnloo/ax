@@ -232,13 +232,7 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, gat
 	task.Status.Phase = "Running"
 
 	// Check if workspace setup inside the actor has completed
-	host := workerIP
-	port := "80"
-	if h, p, err := net.SplitHostPort(workerIP); err == nil {
-		host = h
-		port = p
-	}
-	readyURL := fmt.Sprintf("http://%s:%s/readyz?check=workspace", host, port)
+	readyURL := workspaceReadyURL(workerIP)
 	// Workspace setup happens once per task. After it has completed, WorkspaceReady stays
 	// True across suspend/resume cycles, so only poll while it is still initializing.
 	workspaceReady := r.conditionTrue(task, condWorkspaceReady)
@@ -313,6 +307,17 @@ DonePolling:
 	)
 
 	return task, nil
+}
+
+// workspaceReadyURL builds the readyz URL for the actor's worker IP. The IP
+// may be a bare IPv6 literal (no port); JoinHostPort brackets it so the URL
+// parses and dials the intended host instead of failing the parse.
+func workspaceReadyURL(workerIP string) string {
+	host, port := workerIP, "80"
+	if h, p, err := net.SplitHostPort(workerIP); err == nil {
+		host, port = h, p
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/readyz?check=workspace"
 }
 
 // Condition types reported on Task status.

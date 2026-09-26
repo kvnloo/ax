@@ -60,3 +60,21 @@ func TestSetConditionTransitionTime(t *testing.T) {
 			got.LastTransitionTime.AsTime(), t3)
 	}
 }
+
+// TestWorkspaceReadyURL pins the readyz URL construction. RED on base: the
+// URL was built with fmt.Sprintf("http://%s:%s/..."), so a bare IPv6 worker
+// IP produced "http://fd00::1:80/readyz?check=workspace" — an undiallable
+// URL — and workspace readiness was never detected on IPv6 clusters, leaving
+// the task stuck Initializing. IPv4/hostname behavior is unchanged.
+func TestWorkspaceReadyURL(t *testing.T) {
+	for _, tc := range []struct{ workerIP, want string }{
+		{"10.244.1.42", "http://10.244.1.42:80/readyz?check=workspace"},
+		{"10.244.1.42:8080", "http://10.244.1.42:8080/readyz?check=workspace"},
+		{"fd00::1", "http://[fd00::1]:80/readyz?check=workspace"},
+		{"[fd00::1]:8080", "http://[fd00::1]:8080/readyz?check=workspace"},
+	} {
+		if got := workspaceReadyURL(tc.workerIP); got != tc.want {
+			t.Errorf("workspaceReadyURL(%q) = %q, want %q", tc.workerIP, got, tc.want)
+		}
+	}
+}

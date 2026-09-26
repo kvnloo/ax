@@ -1062,17 +1062,9 @@ func manifestFromArgs(args []string) (data []byte, ok bool, err error) {
 }
 
 func runSuspend(serverURL, atespace string, args []string) error {
-	name := ""
-	if len(args) == 1 {
-		name = args[0]
-	} else if len(args) >= 2 {
-		if args[0] == "task" || args[0] == "tasks" {
-			name = args[1]
-		} else {
-			name = args[0]
-		}
-	} else {
-		return fmt.Errorf("usage: ax suspend task <name>")
+	name, err := parseSuspendResumeName("suspend", args)
+	if err != nil {
+		return err
 	}
 
 	client, conn, err := getAXClient(serverURL)
@@ -1093,17 +1085,9 @@ func runSuspend(serverURL, atespace string, args []string) error {
 }
 
 func runResume(serverURL, atespace string, args []string) error {
-	name := ""
-	if len(args) == 1 {
-		name = args[0]
-	} else if len(args) >= 2 {
-		if args[0] == "task" || args[0] == "tasks" {
-			name = args[1]
-		} else {
-			name = args[0]
-		}
-	} else {
-		return fmt.Errorf("usage: ax resume task <name>")
+	name, err := parseSuspendResumeName("resume", args)
+	if err != nil {
+		return err
 	}
 
 	client, conn, err := getAXClient(serverURL)
@@ -1121,6 +1105,25 @@ func runResume(serverURL, atespace string, args []string) error {
 
 	fmt.Printf("task.ax.io/%s resumed\n", name)
 	return nil
+}
+
+// parseSuspendResumeName extracts the task name for `ax suspend`/`ax resume`:
+// a bare name, or "task <name>" / "tasks <name>". The two-positional legacy
+// form is kept. Anything else — no name or extra trailing args, which used to
+// be silently ignored — is a usage error.
+func parseSuspendResumeName(verb string, args []string) (string, error) {
+	usage := fmt.Sprintf("usage: ax %s task <name>", verb)
+	switch len(args) {
+	case 1:
+		return args[0], nil
+	case 2:
+		if args[0] == "task" || args[0] == "tasks" {
+			return args[1], nil
+		}
+		return args[0], nil
+	default:
+		return "", fmt.Errorf("%s", usage)
+	}
 }
 
 func formatAge(d time.Duration) string {

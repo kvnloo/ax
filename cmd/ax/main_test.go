@@ -262,3 +262,29 @@ func TestRunTunnelStopExtraArgs(t *testing.T) {
 		t.Fatalf("runTunnel(stop, foo, extra) error = %q, want usage error", err)
 	}
 }
+
+// `ax suspend task foo bar` and `ax resume foo bar extra` silently ignored the
+// trailing args and suspended/resumed the first name. Anything beyond the
+// bare-name or kind-name form is a usage error.
+func TestParseSuspendResumeName(t *testing.T) {
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"foo"}, "foo"},
+		{[]string{"task", "foo"}, "foo"},
+		{[]string{"tasks", "foo"}, "foo"},
+		{[]string{"foo", "bar"}, "foo"}, // legacy positional form
+	}
+	for _, tc := range cases {
+		got, err := parseSuspendResumeName("suspend", tc.args)
+		if err != nil || got != tc.want {
+			t.Errorf("parseSuspendResumeName(suspend, %q) = %q, %v; want %q, nil", tc.args, got, err, tc.want)
+		}
+	}
+	for _, args := range [][]string{{}, {"task", "foo", "bar"}, {"foo", "bar", "baz"}} {
+		if name, err := parseSuspendResumeName("resume", args); err == nil {
+			t.Errorf("parseSuspendResumeName(resume, %q) = %q, nil; want usage error", args, name)
+		}
+	}
+}

@@ -26,7 +26,9 @@ import (
 	"github.com/google/ax/internal/substrate"
 	"github.com/google/ax/pkg/apis/v1alpha1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 type mockControlServer struct {
@@ -40,6 +42,10 @@ type mockControlServer struct {
 	deletedActors    []string
 	actorTemplates   map[string]bool
 	deletedTemplates []string
+	// deleteTemplateErr, when set, is returned by DeleteActorTemplate instead of
+	// deleting; deleteTemplateCalls counts the attempts.
+	deleteTemplateErr   error
+	deleteTemplateCalls int
 }
 
 // noSecrets is a SecretResolver for tests: it never finds a key and never touches a cluster.
@@ -131,6 +137,10 @@ func (m *mockControlServer) ListActorTemplates(ctx context.Context, req *ateapip
 
 func (m *mockControlServer) DeleteActorTemplate(ctx context.Context, req *ateapipb.DeleteActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
 	name := req.GetActorTemplate().GetName()
+	m.deleteTemplateCalls++
+	if m.deleteTemplateErr != nil {
+		return nil, m.deleteTemplateErr
+	}
 	delete(m.actorTemplates, name)
 	m.deletedTemplates = append(m.deletedTemplates, name)
 	return &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Name: name}}, nil
@@ -452,5 +462,86 @@ func TestReconcileDelete_RemovesActorAndTemplates(t *testing.T) {
 		if !mockSrv.actorTemplates[keep] {
 			t.Errorf("template %s should not have been deleted", keep)
 		}
+	}
+}
+
+// TestReconcileDelete_TemplateRetryScope pins the retry contract of
+// deleteTaskTemplates: only Aborted is worth retrying (actor deletion still
+// finishing); any other error fails fast after a single attempt instead of
+// burning 5 attempts x 500ms. RED on base: PermissionDenied was attempted
+// 5 times.
+func TestReconcileDelete_TemplateRetryScope(t *testing.T) {
+	ctx := context.Background()
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer lis.Close()
+
+	mockSrv := &mockControlServer{
+		actorTemplates:    map[string]bool{"job-tmpl-0a1b2c3d": true},
+		deleteTemplateErr: status.Error(codes.PermissionDenied, "no permission"),
+	}
+	grpcServer := grpc.NewServer()
+	ateapipb.RegisterControlServer(grpcServer, mockSrv)
+	go grpcServer.Serve(lis)
+	defer grpcServer.Stop()
+
+	client, err := substrate.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("failed to create substrate client: %v", err)
+	}
+	defer client.Close()
+
+	reconciler := controller.NewTaskReconciler(client, "test-template", "ax-system")
+
+	start := time.Now()
+	if err := reconciler.ReconcileDelete(ctx, "default", "job"); err != nil {
+		t.Fatalf("ReconcileDelete failed: %v", err)
+	}
+	elapsed := time.Since(start)
+
+	if mockSrv.deleteTemplateCalls != 1 {
+		t.Errorf("non-retryable error attempted %d times, want 1 (fail fast)", mockSrv.deleteTemplateCalls)
+	}
+	if elapsed >= 500*time.Millisecond {
+		t.Errorf("fail-fast delete took %v, want < 500ms (no backoff sleeps)", elapsed)
+	}
+}
+
+// TestReconcileDelete_TemplateDeleteAbortedRetries pins that Aborted is still
+// retried: the actor deletion finishing in Substrate must not strand templates.
+func TestReconcileDelete_TemplateDeleteAbortedRetries(t *testing.T) {
+	ctx := context.Background()
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer lis.Close()
+
+	mockSrv := &mockControlServer{
+		actorTemplates:    map[string]bool{"job-tmpl-0a1b2c3d": true},
+		deleteTemplateErr: status.Error(codes.Aborted, "actor deletion in progress"),
+	}
+	grpcServer := grpc.NewServer()
+	ateapipb.RegisterControlServer(grpcServer, mockSrv)
+	go grpcServer.Serve(lis)
+	defer grpcServer.Stop()
+
+	client, err := substrate.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("failed to create substrate client: %v", err)
+	}
+	defer client.Close()
+
+	reconciler := controller.NewTaskReconciler(client, "test-template", "ax-system")
+
+	if err := reconciler.ReconcileDelete(ctx, "default", "job"); err != nil {
+		t.Fatalf("ReconcileDelete failed: %v", err)
+	}
+	if mockSrv.deleteTemplateCalls != 5 {
+		t.Errorf("Aborted attempted %d times, want 5 (retry with backoff)", mockSrv.deleteTemplateCalls)
 	}
 }

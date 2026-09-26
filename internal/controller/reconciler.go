@@ -425,7 +425,8 @@ func (r *TaskReconciler) ReconcileDelete(ctx context.Context, atespace, taskName
 // deleteTaskTemplates removes all ActorTemplates belonging to the task. Templates
 // accumulate across spec revisions, so this matches by name pattern rather than
 // recomputing a single digest. If an actor deletion is still finishing in Substrate,
-// template deletion may briefly return Aborted, so we retry with backoff.
+// template deletion may briefly return Aborted, so only Aborted is retried with
+// backoff — any other error fails fast instead of burning 5 attempts × 500ms.
 func (r *TaskReconciler) deleteTaskTemplates(ctx context.Context, atespace, taskName string) error {
 	templates, err := r.client.ListActorTemplates(ctx, atespace)
 	if err != nil {
@@ -440,16 +441,20 @@ func (r *TaskReconciler) deleteTaskTemplates(ctx context.Context, atespace, task
 		}
 		slog.Info("deleting Substrate actor template for task", "atespace", atespace, "task", taskName, "template", name)
 		var delErr error
+	retry:
 		for attempt := 0; attempt < 5; attempt++ {
 			delErr = r.client.DeleteActorTemplate(ctx, atespace, name)
 			if delErr == nil || status.Code(delErr) == codes.NotFound {
 				delErr = nil
 				break
 			}
+			if status.Code(delErr) != codes.Aborted || attempt == 4 {
+				break
+			}
 			select {
 			case <-ctx.Done():
 				delErr = ctx.Err()
-				break
+				break retry
 			case <-time.After(500 * time.Millisecond):
 			}
 		}

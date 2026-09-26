@@ -34,6 +34,7 @@ import (
 type fakeAXClient struct {
 	v1alpha1.AXClient
 	getTaskErr   error
+	getTask      *v1alpha1.Task
 	updatedTasks []*v1alpha1.Task
 	listedTasks  []*v1alpha1.Task
 }
@@ -41,6 +42,9 @@ type fakeAXClient struct {
 func (f *fakeAXClient) GetTask(ctx context.Context, in *v1alpha1.GetTaskRequest, opts ...grpc.CallOption) (*v1alpha1.Task, error) {
 	if f.getTaskErr != nil {
 		return nil, f.getTaskErr
+	}
+	if f.getTask != nil {
+		return f.getTask, nil
 	}
 	return &v1alpha1.Task{}, nil
 }

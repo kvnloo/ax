@@ -860,6 +860,12 @@ func runDescribe(serverURL, atespace string, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
+	return runDescribeWithClient(ctx, client, atespace, kind, name)
+}
+
+// runDescribeWithClient renders one object's detail view. The client is
+// injected so tests can drive the rendering against a fake server.
+func runDescribeWithClient(ctx context.Context, client v1alpha1.AXClient, atespace, kind, name string) error {
 	if kind == v1alpha1.KindModel {
 		m, err := client.GetModel(ctx, &v1alpha1.GetModelRequest{Atespace: atespace, Name: name})
 		if err != nil {
@@ -872,8 +878,8 @@ func runDescribe(serverURL, atespace string, args []string) error {
 			mName = m.Metadata.Name
 			mAtespace = m.Metadata.Atespace
 		}
-		fmt.Printf("Name:               %s\n", mName)
-		fmt.Printf("Atespace:           %s\n", mAtespace)
+		fmt.Printf("Name:               %s\n", sanitizeCell(mName))
+		fmt.Printf("Atespace:           %s\n", sanitizeCell(mAtespace))
 		if m.Spec != nil {
 			fmt.Printf("Provider:           %s\n", m.Spec.Provider)
 			fmt.Printf("Model:              %s\n", m.Spec.Model)
@@ -913,8 +919,8 @@ func runDescribe(serverURL, atespace string, args []string) error {
 			wsName = ws.Metadata.Name
 			wsAtespace = ws.Metadata.Atespace
 		}
-		fmt.Printf("Name:         %s\n", wsName)
-		fmt.Printf("Atespace:     %s\n", wsAtespace)
+		fmt.Printf("Name:         %s\n", sanitizeCell(wsName))
+		fmt.Printf("Atespace:     %s\n", sanitizeCell(wsAtespace))
 		if ws.Spec != nil {
 			if len(ws.Spec.Git) > 0 {
 				fmt.Println("Git Repositories:")
@@ -972,8 +978,8 @@ func runDescribe(serverURL, atespace string, args []string) error {
 			gwName = gw.Metadata.Name
 			gwAtespace = gw.Metadata.Atespace
 		}
-		fmt.Printf("Name:         %s\n", gwName)
-		fmt.Printf("Atespace:     %s\n", gwAtespace)
+		fmt.Printf("Name:         %s\n", sanitizeCell(gwName))
+		fmt.Printf("Atespace:     %s\n", sanitizeCell(gwAtespace))
 		if gw.Spec != nil {
 			if len(gw.Spec.Listeners) > 0 {
 				fmt.Println("Listeners:")
@@ -1016,8 +1022,8 @@ func runDescribe(serverURL, atespace string, args []string) error {
 		conditions = task.Status.Conditions
 	}
 
-	fmt.Printf("Name:         %s\n", taskName)
-	fmt.Printf("Atespace:     %s\n", taskAtespace)
+	fmt.Printf("Name:         %s\n", sanitizeCell(taskName))
+	fmt.Printf("Atespace:     %s\n", sanitizeCell(taskAtespace))
 	fmt.Printf("Phase:        %s\n", phase)
 	fmt.Printf("Actor:        %s\n", displayActor(actor))
 	fmt.Printf("Worker IP:    %s\n", displayWorkerIP(workerIP))
@@ -1063,7 +1069,7 @@ func writeConditions(w io.Writer, conditions []*v1alpha1.Condition) {
 	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
 	fmt.Fprintln(tw, "  TYPE\tSTATUS\tREASON\tMESSAGE")
 	for _, c := range conditions {
-		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", c.Type, c.Status, c.Reason, c.Message)
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", sanitizeCell(c.Type), sanitizeCell(c.Status), sanitizeCell(c.Reason), sanitizeCell(c.Message))
 	}
 	_ = tw.Flush()
 }

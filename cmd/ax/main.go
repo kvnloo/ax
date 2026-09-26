@@ -1064,6 +1064,44 @@ func runContext(kubeContext string) error {
 	return nil
 }
 
+// knownTunnelContexts returns the sorted contexts of tunnels with saved
+// state, best-effort (nil if the tunnel dir cannot be listed).
+func knownTunnelContexts() []string {
+	tunnels, err := tunnel.ListTunnels()
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(tunnels))
+	for _, t := range tunnels {
+		if t != nil {
+			names = append(names, t.Context)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// tunnelNotFoundErr builds the user-facing error for "tunnel stop" when no
+// tunnel state exists for ctxName. It names the context the command targeted
+// and lists the known tunnel contexts so the user can disambiguate, instead
+// of leaking the tunnel state-file path from the underlying fs error.
+func tunnelNotFoundErr(ctxName string, isCurrent bool, known []string) error {
+	var b strings.Builder
+	if isCurrent {
+		fmt.Fprintf(&b, "no tunnel found for current context %q", ctxName)
+	} else {
+		fmt.Fprintf(&b, "no tunnel found for context %q", ctxName)
+	}
+	if len(known) > 0 {
+		quoted := make([]string, len(known))
+		for i, k := range known {
+			quoted[i] = strconv.Quote(k)
+		}
+		fmt.Fprintf(&b, "; active tunnels: %s (see 'ax tunnel list')", strings.Join(quoted, ", "))
+	}
+	return errors.New(b.String())
+}
+
 func runTunnel(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("specify tunnel action: 'ax tunnel list' or 'ax tunnel stop [context]'")
@@ -1095,6 +1133,9 @@ func runTunnel(args []string) error {
 		if len(args) > 1 {
 			ctxName := args[1]
 			if err := tunnel.StopTunnelByContext(ctxName); err != nil {
+				if os.IsNotExist(err) {
+					return tunnelNotFoundErr(ctxName, false, knownTunnelContexts())
+				}
 				return fmt.Errorf("stopping tunnel for context %q: %w", ctxName, err)
 			}
 			fmt.Printf("Tunnel stopped for context %q\n", ctxName)
@@ -1105,6 +1146,9 @@ func runTunnel(args []string) error {
 			return fmt.Errorf("no current context found to stop tunnel")
 		}
 		if err := tunnel.StopTunnelByContext(cur); err != nil {
+			if os.IsNotExist(err) {
+				return tunnelNotFoundErr(cur, true, knownTunnelContexts())
+			}
 			return fmt.Errorf("stopping tunnel for context %q: %w", cur, err)
 		}
 		fmt.Printf("Tunnel stopped for context %q\n", cur)

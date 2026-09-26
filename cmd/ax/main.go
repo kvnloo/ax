@@ -153,6 +153,13 @@ func parseGlobalArgs(args []string) (cmd string, cleanArgs []string, atespace, e
 		} else if strings.HasPrefix(arg, "--atespace=") {
 			atespace = strings.TrimPrefix(arg, "--atespace=")
 			atespaceExplicit = true
+		} else if strings.HasPrefix(arg, "-a=") {
+			// The short = form (`-a=prod`) that Go's flag package and kubectl
+			// accept: the old code only matched bare `-a`, so `-a=prod` fell
+			// into cleanArgs and blew up in normalizeKind with a misleading
+			// "unsupported kind" instead of scoping the command.
+			atespace = strings.TrimPrefix(arg, "-a=")
+			atespaceExplicit = true
 		} else if arg == "--server" {
 			if i+1 < len(args) {
 				explicitServer = args[i+1]
@@ -183,6 +190,9 @@ func parseGlobalArgs(args []string) (cmd string, cleanArgs []string, atespace, e
 			}
 		} else if strings.HasPrefix(arg, "--namespace=") {
 			axNamespace = strings.TrimPrefix(arg, "--namespace=")
+		} else if strings.HasPrefix(arg, "-n=") {
+			// Same short-= gap as -a=: `-n=prod` fell into cleanArgs.
+			axNamespace = strings.TrimPrefix(arg, "-n=")
 		} else if cmd == "" && !strings.HasPrefix(arg, "-") {
 			cmd = arg
 		} else {

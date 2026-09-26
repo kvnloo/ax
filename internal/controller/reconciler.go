@@ -166,7 +166,7 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, gat
 	// If a custom image, workspace, or extra environment is specified, provision or use a dedicated ActorTemplate
 	if task.Spec != nil && (task.Spec.Image != "" || len(extraEnv) > 0) {
 		slog.Info("ensuring custom ActorTemplate for task", "image", task.Spec.Image)
-		customTemplateName := taskTemplateName(task.Metadata.Name, task.Spec.Image, extraEnv)
+		customTemplateName := taskTemplateName(task.Metadata.Name, task.Spec.Image, templateDigestEnv(task, extraEnv))
 
 		tmpl, err := r.client.EnsureActorTemplateWithImage(ctx, templateAtespace, templateName, atespace, customTemplateName, task.Spec.Image, extraEnv)
 		if err != nil {
@@ -382,6 +382,30 @@ func (r *TaskReconciler) lookupGeminiKey(ctx context.Context, atespace string) s
 		return key
 	}
 	return ""
+}
+
+// templateDigestEnv returns the environment map used to derive the per-task
+// ActorTemplate name. The name must be stable across reconciles: AX_TASK_YAML
+// embeds the task status (conditions, worker IP, transition timestamps), which
+// changes on every pass, so the digest uses a status-stripped copy instead.
+// Without this, every reconcile mints a new <task>-tmpl-<digest> template and
+// the old ones accumulate until the task is deleted. The actor itself still
+// receives the full AX_TASK_YAML via extraEnv.
+func templateDigestEnv(task *v1alpha1.Task, extraEnv map[string]string) map[string]string {
+	env := make(map[string]string, len(extraEnv))
+	for k, v := range extraEnv {
+		env[k] = v
+	}
+	digestTask := &v1alpha1.Task{
+		ApiVersion: task.ApiVersion,
+		Kind:       task.Kind,
+		Metadata:   task.Metadata,
+		Spec:       task.Spec,
+	}
+	if digestYAML, err := yaml.Marshal(digestTask); err == nil {
+		env["AX_TASK_YAML"] = string(digestYAML)
+	}
+	return env
 }
 
 // taskTemplateName derives the per-task ActorTemplate name from the task name and a

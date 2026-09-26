@@ -46,6 +46,9 @@ type mockControlServer struct {
 	// deleting; deleteTemplateCalls counts the attempts.
 	deleteTemplateErr   error
 	deleteTemplateCalls int
+	// createdTemplates records every ActorTemplate name requested via
+	// CreateActorTemplate, in order.
+	createdTemplates []string
 }
 
 // noSecrets is a SecretResolver for tests: it never finds a key and never touches a cluster.
@@ -146,6 +149,20 @@ func (m *mockControlServer) DeleteActorTemplate(ctx context.Context, req *ateapi
 	return &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Name: name}}, nil
 }
 
+func (m *mockControlServer) CreateActorTemplate(ctx context.Context, req *ateapipb.CreateActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
+	tmpl := req.GetActorTemplate()
+	name := tmpl.GetMetadata().GetName()
+	m.createdTemplates = append(m.createdTemplates, name)
+	if m.actorTemplates == nil {
+		m.actorTemplates = map[string]bool{}
+	}
+	m.actorTemplates[name] = true
+	return &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{
+		Name:     name,
+		Atespace: tmpl.GetMetadata().GetAtespace(),
+	}}, nil
+}
+
 func TestTaskReconciler(t *testing.T) {
 	ctx := context.Background()
 
@@ -234,6 +251,87 @@ func TestTaskReconciler(t *testing.T) {
 	}
 	if len(mockSrv.createdPolicies) != 1 || mockSrv.createdPolicies[0] != "test-task" {
 		t.Errorf("expected egress policy created for 'test-task', got %v", mockSrv.createdPolicies)
+	}
+}
+
+// TestReconcile_TemplateNameStableAcrossReconciles pins the template-churn
+// contract: reconciling the same task twice must request the SAME
+// ActorTemplate name — only a spec change may mint a new one. RED on base:
+// the digest covered the full AX_TASK_YAML (status included), so the second
+// pass, carrying the first pass's status (conditions, worker IP, fresh
+// transition timestamps), requested a different template name, leaking one
+// ActorTemplate per reconcile until task deletion.
+func TestReconcile_TemplateNameStableAcrossReconciles(t *testing.T) {
+	ctx := context.Background()
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer lis.Close()
+
+	mockSrv := &mockControlServer{}
+	grpcServer := grpc.NewServer()
+	ateapipb.RegisterControlServer(grpcServer, mockSrv)
+	go grpcServer.Serve(lis)
+	defer grpcServer.Stop()
+
+	client, err := substrate.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("failed to create substrate client: %v", err)
+	}
+	defer client.Close()
+
+	reconciler := controller.NewTaskReconciler(client, "test-template", "ax-system")
+	reconciler.SecretResolver = noSecrets
+	reconciler.WorkspaceReadyTimeout = 200 * time.Millisecond
+
+	newTask := func() *v1alpha1.Task {
+		return &v1alpha1.Task{
+			ApiVersion: v1alpha1.APIVersion,
+			Kind:       v1alpha1.KindTask,
+			Metadata: &v1alpha1.ObjectMeta{
+				Name:     "churn-task",
+				Atespace: "default",
+			},
+			Spec: &v1alpha1.TaskSpec{
+				Image:   "ghrc.io/my-org/my-image",
+				Command: []string{"/bin/task-runner"},
+				Env:     []*v1alpha1.EnvVar{{Name: "FOO", Value: "bar"}},
+			},
+		}
+	}
+
+	first, err := reconciler.Reconcile(ctx, newTask(), nil)
+	if err != nil {
+		t.Fatalf("first Reconcile failed: %v", err)
+	}
+	// Second pass carries the first pass's status: conditions with fresh
+	// transition timestamps, worker IP, actor name.
+	second, err := reconciler.Reconcile(ctx, first, nil)
+	if err != nil {
+		t.Fatalf("second Reconcile failed: %v", err)
+	}
+	if len(mockSrv.createdTemplates) != 2 {
+		t.Fatalf("expected 2 template creations, got %v", mockSrv.createdTemplates)
+	}
+	if mockSrv.createdTemplates[0] != mockSrv.createdTemplates[1] {
+		t.Errorf("template name churned across reconciles with no spec change: %q vs %q",
+			mockSrv.createdTemplates[0], mockSrv.createdTemplates[1])
+	}
+
+	// A genuine spec change must still yield a new template.
+	changed := second
+	changed.Spec.Env = []*v1alpha1.EnvVar{{Name: "FOO", Value: "baz"}}
+	if _, err := reconciler.Reconcile(ctx, changed, nil); err != nil {
+		t.Fatalf("third Reconcile failed: %v", err)
+	}
+	if len(mockSrv.createdTemplates) != 3 {
+		t.Fatalf("expected 3 template creations, got %v", mockSrv.createdTemplates)
+	}
+	if mockSrv.createdTemplates[2] == mockSrv.createdTemplates[1] {
+		t.Errorf("spec change did not yield a new template name: %q reused",
+			mockSrv.createdTemplates[2])
 	}
 }
 

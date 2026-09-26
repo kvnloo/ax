@@ -396,7 +396,10 @@ func applyDocument(ctx context.Context, client v1alpha1.AXClient, doc *yaml.Node
 	// GetTask("") missed, UpdateTask persisted a nameless record, and the
 	// CLI printed `task.ax.io/ created` for a resource with no name.
 	// kubectl rejects this client-side; so do we, before any RPC.
-	if head.Metadata.Name == "" {
+	// Whitespace-only names (" ") are the same defect one character wider:
+	// the == "" check passes, GetTask(" ") misses, and a record named " "
+	// is persisted and printed as `task.ax.io/  created`.
+	if strings.TrimSpace(head.Metadata.Name) == "" {
 		return "", "", "", fmt.Errorf("missing metadata.name")
 	}
 

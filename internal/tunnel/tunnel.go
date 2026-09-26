@@ -186,11 +186,45 @@ func isPortForwardProcess(pid int) bool {
 }
 
 func StopTunnelByContext(ctxName string) error {
-	info, err := GetTunnel(ctxName)
+	dir, err := TunnelDir()
 	if err != nil {
 		return err
 	}
-	return StopTunnel(info)
+	// Take the spawn lock so a concurrent EnsureServerURL cannot save a new
+	// tunnel entry between our Get and our Stop.
+	return withTunnelLock(dir, func() error {
+		info, err := GetTunnel(ctxName)
+		if err != nil {
+			return err
+		}
+		return StopTunnel(info)
+	})
+}
+
+// withTunnelLock runs fn while holding an exclusive advisory lock on the
+// tunnel state directory, so concurrent ax processes cannot interleave the
+// check-then-spawn sequence in EnsureServerURL. Without it, two processes
+// starting at once both find no active tunnel, both spawn a kubectl
+// port-forward, and both SaveTunnel; the last write wins and the other
+// tunnel is orphaned — no state file, still holding its local port.
+//
+// The lock is a ".lock" file in the tunnel directory held via flock(LOCK_EX)
+// for the duration of fn; a crashed holder releases it when its file
+// descriptor closes. Callers must not nest withTunnelLock: flock locks are
+// per open file description, so re-entering from the same process
+// deadlocks.
+func withTunnelLock(dir string, fn func() error) error {
+	lockPath := filepath.Join(dir, ".lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return fmt.Errorf("opening tunnel lock file: %w", err)
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("acquiring tunnel lock: %w", err)
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return fn()
 }
 
 func ListTunnels() ([]*TunnelInfo, error) {
@@ -279,23 +313,46 @@ func EnsureServerURL(opts Options) (string, error) {
 		opts.Port = 8080
 	}
 
-	// Check for existing active tunnel. The recorded process must still be
-	// the kubectl port-forward that created the entry: a stale state file
-	// with a recycled port serving an unrelated /healthz 200 must be reaped,
-	// not adopted (see IsTunnelActive).
-	if existing, err := GetTunnel(ctxName); err == nil && existing != nil {
-		if IsTunnelActive(existing) {
-			return fmt.Sprintf("http://127.0.0.1:%d", existing.Port), nil
-		}
-		// Existing tunnel is unhealthy or stale, clean it up
-		_ = StopTunnel(existing)
-	}
-
-	// Start new background port-forward for this context
 	dir, err := TunnelDir()
 	if err != nil {
 		return "", fmt.Errorf("creating tunnel directory: %w", err)
 	}
+
+	// Serialize the check-then-spawn sequence below across concurrent ax
+	// processes; see withTunnelLock.
+	serverURL := ""
+	if err := withTunnelLock(dir, func() error {
+		// Check for existing active tunnel. The recorded process must still be
+		// the kubectl port-forward that created the entry: a stale state file
+		// with a recycled port serving an unrelated /healthz 200 must be reaped,
+		// not adopted (see IsTunnelActive).
+		if existing, err := GetTunnel(ctxName); err == nil && existing != nil {
+			if IsTunnelActive(existing) {
+				serverURL = fmt.Sprintf("http://127.0.0.1:%d", existing.Port)
+				return nil
+			}
+			// Existing tunnel is unhealthy or stale, clean it up
+			_ = StopTunnel(existing)
+		}
+
+		// Start new background port-forward for this context
+		url, err := spawnTunnel(ctxName, dir, opts)
+		if err != nil {
+			return err
+		}
+		serverURL = url
+		return nil
+	}); err != nil {
+		return "", err
+	}
+	return serverURL, nil
+}
+
+// spawnTunnel starts a background kubectl port-forward for ctxName, waits for
+// the local port assignment and a passing health check, records the tunnel
+// state, and returns the server URL. Callers must hold the tunnel lock (see
+// withTunnelLock) so two processes cannot spawn for the same context at once.
+func spawnTunnel(ctxName, dir string, opts Options) (string, error) {
 	logPath := filepath.Join(dir, SanitizeContext(ctxName)+".log")
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {

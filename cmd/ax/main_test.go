@@ -33,6 +33,18 @@ func TestSSHTargetActor(t *testing.T) {
 			"/actor-1",
 		},
 		{
+			"nil status does not panic",
+			&v1alpha1.Task{
+				Metadata: &v1alpha1.ObjectMeta{Atespace: "prod"},
+			},
+			"prod/",
+		},
+		{
+			"nil metadata and status does not panic",
+			&v1alpha1.Task{},
+			"/",
+		},
+		{
 			"empty metadata",
 			&v1alpha1.Task{
 				Metadata: &v1alpha1.ObjectMeta{},

@@ -322,9 +322,19 @@ func runApply(serverURL, atespace string, atespaceExplicit bool, args []string) 
 // the command takes only -f/--file, so anything else is a typo. The -f
 // flag value and other flags pass through untouched.
 func validateApplyPositionals(args []string) error {
+	seenFile := false
 	for i := 0; i < len(args); i++ {
-		if args[i] == "-f" || args[i] == "--file" {
-			i++ // skip the flag value
+		if _, isFile := fileFlagValue(args[i]); isFile {
+			// manifestFromArgs applies only the FIRST -f/--file, so a second
+			// one was silently dropped (`ax apply -f a.yaml -f b.yaml`
+			// applied only a.yaml with exit 0). Make that loud instead.
+			if seenFile {
+				return fmt.Errorf("usage: ax apply -f <file> (duplicate -f/--file flag; specify one manifest)")
+			}
+			seenFile = true
+			if args[i] == "-f" || args[i] == "--file" {
+				i++ // skip the flag value
+			}
 			continue
 		}
 		if strings.HasPrefix(args[i], "-") {

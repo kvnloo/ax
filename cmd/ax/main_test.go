@@ -339,6 +339,37 @@ func TestApplyRejectsExtraPositional(t *testing.T) {
 	}
 }
 
+// `ax apply -f a.yaml -f b.yaml` used to apply only a.yaml: manifestFromArgs
+// returns on the first file flag, so the second manifest was silently
+// dropped with exit 0. The validator must reject the duplicate instead.
+func TestApplyRejectsDuplicateFileFlag(t *testing.T) {
+	cases := [][]string{
+		{"-f", "a.yaml", "-f", "b.yaml"},
+		{"-f", "a.yaml", "--file", "b.yaml"},
+		{"--file=a.yaml", "--file=b.yaml"},
+		{"-f=a.yaml", "-f", "b.yaml"},
+	}
+	for _, args := range cases {
+		if err := validateApplyPositionals(args); err == nil ||
+			!strings.Contains(err.Error(), "duplicate -f/--file") {
+			t.Fatalf("validateApplyPositionals(%v) = %v, want duplicate -f/--file error", args, err)
+		}
+	}
+	// a single file flag in any spelling still passes
+	singles := [][]string{
+		{"-f", "a.yaml"},
+		{"--file", "a.yaml"},
+		{"--file=a.yaml"},
+		{"-f=a.yaml"},
+		{"-f", "-"},
+	}
+	for _, args := range singles {
+		if err := validateApplyPositionals(args); err != nil {
+			t.Fatalf("validateApplyPositionals(%v) = %v, want nil", args, err)
+		}
+	}
+}
+
 func TestRunApplyExtraPositionalRejectedBeforeDial(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "m.yaml")

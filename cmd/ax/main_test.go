@@ -16,6 +16,10 @@ package main
 
 import (
 	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -128,5 +132,67 @@ spec: {}
 	}
 	if len(fc.updatedTasks) != 2 {
 		t.Fatalf("expected 2 UpdateTask calls, got %d", len(fc.updatedTasks))
+	}
+}
+
+// releaseSSHSession must invoke the port-forward cleanup and every closer,
+// tolerating a nil cleanup (direct-reachability path).
+func TestReleaseSSHSessionRunsAll(t *testing.T) {
+	var order []string
+	releaseSSHSession(
+		func() { order = append(order, "cleanup") },
+		func() error { order = append(order, "guest"); return nil },
+		func() error { order = append(order, "conn"); return errors.New("boom") },
+	)
+	if strings.Join(order, ",") != "cleanup,guest,conn" {
+		t.Fatalf("order = %v, want all three invoked in order", order)
+	}
+	releaseSSHSession(nil, func() error { order = append(order, "only"); return nil })
+	if order[len(order)-1] != "only" {
+		t.Fatalf("nil cleanup must be tolerated, order = %v", order)
+	}
+}
+
+// The non-zero remote exit path in runSSH calls os.Exit, which never runs
+// deferred calls. This test forks a child exercising the two patterns:
+// the pre-fix pattern (defer cleanup; os.Exit) must leave the marker absent
+// (the leak), while the fixed pattern (explicit releaseSSHSession before
+// os.Exit) must leave it present and still exit with the remote status.
+func TestRemoteExitCleanupMechanic(t *testing.T) {
+	if mode := os.Getenv("AX_SSH_EXIT_CHILD"); mode != "" {
+		marker := os.Getenv("AX_SSH_EXIT_MARKER")
+		cleanup := func() { _ = os.WriteFile(marker, []byte("cleaned"), 0644) }
+		if mode == "old" {
+			defer cleanup()
+			os.Exit(3) // pre-fix pattern: deferred cleanup never runs
+		}
+		releaseSSHSession(cleanup, func() error { return nil })
+		os.Exit(3) // fixed pattern: cleanup runs, exit status preserved
+	}
+
+	for _, tc := range []struct {
+		mode        string
+		wantMarker  bool
+		description string
+	}{
+		{"old", false, "pre-fix defer+os.Exit pattern must skip cleanup (the leak)"},
+		{"new", true, "fixed explicit-release pattern must run cleanup before exiting"},
+	} {
+		marker := filepath.Join(t.TempDir(), "cleaned")
+		cmd := exec.Command(os.Args[0], "-test.run=TestRemoteExitCleanupMechanic")
+		cmd.Env = append(os.Environ(),
+			"AX_SSH_EXIT_CHILD="+tc.mode, "AX_SSH_EXIT_MARKER="+marker)
+		err := cmd.Run()
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 3 {
+			t.Fatalf("%s: child exit = %v, want status 3", tc.description, err)
+		}
+		_, statErr := os.Stat(marker)
+		if tc.wantMarker && statErr != nil {
+			t.Fatalf("%s: marker absent, cleanup did not run", tc.description)
+		}
+		if !tc.wantMarker && statErr == nil {
+			t.Fatalf("%s: marker present, expected the leak", tc.description)
+		}
 	}
 }

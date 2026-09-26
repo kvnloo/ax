@@ -1148,6 +1148,23 @@ func runTunnel(args []string) error {
 	}
 }
 
+// releaseSSHSession releases the resources held by an ssh session: the
+// ephemeral atenet-router port-forward (nil on the direct-reachability path)
+// and the gRPC connections. The non-zero remote exit path calls os.Exit,
+// which never runs deferred calls, so this must be invoked explicitly before
+// exiting — otherwise a failing remote command leaks a stray kubectl
+// port-forward process.
+func releaseSSHSession(cleanup func(), closers ...func() error) {
+	if cleanup != nil {
+		cleanup()
+	}
+	for _, c := range closers {
+		if c != nil {
+			_ = c()
+		}
+	}
+}
+
 func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: ax ssh <task-name> [-- command...]")
@@ -1256,6 +1273,9 @@ func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 	}
 
 	if exitCode != 0 {
+		// os.Exit skips the deferred cleanup/Close calls above: release the
+		// port-forward and connections explicitly first.
+		releaseSSHSession(cleanup, guestClient.Close, conn.Close)
 		os.Exit(exitCode)
 	}
 

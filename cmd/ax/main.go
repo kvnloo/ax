@@ -527,7 +527,11 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 			var listenerList []string
 			if g.Spec != nil {
 				for _, l := range g.Spec.Listeners {
-					listenerList = append(listenerList, fmt.Sprintf("%d/%s", l.Port, listenerProtocol(l)))
+					s := fmt.Sprintf("%d", l.Port)
+					if p := listenerProtocol(l); p != "" {
+						s = fmt.Sprintf("%d/%s", l.Port, p)
+					}
+					listenerList = append(listenerList, s)
 				}
 			}
 			listenersStr := strings.Join(listenerList, ",")
@@ -829,7 +833,11 @@ func runDescribe(serverURL, atespace string, args []string) error {
 			if len(gw.Spec.Listeners) > 0 {
 				fmt.Println("Listeners:")
 				for _, l := range gw.Spec.Listeners {
-					fmt.Printf("  - %s: %d (%s)\n", l.Name, l.Port, listenerProtocol(l))
+					if p := listenerProtocol(l); p != "" {
+						fmt.Printf("  - %s: %d (%s)\n", l.Name, l.Port, p)
+					} else {
+						fmt.Printf("  - %s: %d\n", l.Name, l.Port)
+					}
 				}
 			}
 			if gw.Spec.Egress != nil && gw.Spec.Egress.Allowlist != nil && len(gw.Spec.Egress.Allowlist.Hosts) > 0 {
@@ -1575,13 +1583,14 @@ func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 	return nil
 }
 
-// listenerProtocol renders a gateway listener's protocol for display. The
-// field is optional on the wire, and an empty value printed raw ("80 ()" in
-// describe, "80/" in get) reads as a rendering bug; the Gateway API defaults
-// an unspecified listener protocol to HTTP, so that is what we show.
+// listenerProtocol renders a gateway listener's protocol for display, or ""
+// when the field is empty. Protocol is optional on the wire and nothing in
+// this codebase defaults an empty value (there is no Gateway API defaulting
+// here), so an empty protocol renders as no annotation rather than a
+// fabricated "HTTP".
 func listenerProtocol(l *v1alpha1.Listener) string {
 	if l == nil || l.Protocol == "" {
-		return "HTTP"
+		return ""
 	}
 	return l.Protocol
 }

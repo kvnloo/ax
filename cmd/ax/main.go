@@ -1115,22 +1115,30 @@ func runTunnel(args []string) error {
 	}
 }
 
+// parseSSHCommand splits the arguments after the task name into the remote
+// command. A "--" ends flag parsing and everything after it is passed through
+// verbatim — appended to, not replacing, any command words before it — so
+// `ax ssh mytask echo -- -n foo` runs `echo -n foo` remotely. It returns nil
+// when no command words are present (the caller falls back to /bin/sh).
+func parseSSHCommand(args []string) []string {
+	var cmd []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--" {
+			cmd = append(cmd, args[i+1:]...)
+			break
+		}
+		cmd = append(cmd, args[i])
+	}
+	return cmd
+}
+
 func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: ax ssh <task-name> [-- command...]")
 	}
 
 	taskName := args[0]
-	var cmdToRun []string
-	for i := 1; i < len(args); i++ {
-		if args[i] == "--" {
-			cmdToRun = args[i+1:]
-			break
-		} else {
-			cmdToRun = append(cmdToRun, args[i])
-		}
-	}
-
+	cmdToRun := parseSSHCommand(args[1:])
 	if len(cmdToRun) == 0 {
 		cmdToRun = []string{"/bin/sh"}
 	}

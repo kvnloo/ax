@@ -446,7 +446,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 
 	resource := strings.ToLower(args[0])
 
-	if resource == "tasks" || resource == "task" && len(args) == 1 {
+	if (resource == "tasks" || resource == "task") && len(args) == 1 {
 		resp, err := client.ListTasks(ctx, &v1alpha1.ListTasksRequest{Atespace: atespace})
 		if err != nil {
 			return fmt.Errorf("listing tasks: %w", err)
@@ -500,6 +500,9 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 	}
 
 	if (resource == "task" || resource == "tasks") && len(args) >= 2 {
+		if len(args) > 2 {
+			return fmt.Errorf("usage: ax get <task|tasks> <name> (unexpected extra argument %q)", args[2])
+		}
 		name := args[1]
 		task, err := client.GetTask(ctx, &v1alpha1.GetTaskRequest{Atespace: atespace, Name: name})
 		if err != nil {
@@ -509,7 +512,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 		return yaml.NewEncoder(os.Stdout).Encode(task)
 	}
 
-	if resource == "gateways" || resource == "gateway" && len(args) == 1 {
+	if (resource == "gateways" || resource == "gateway") && len(args) == 1 {
 		resp, err := client.ListGateways(ctx, &v1alpha1.ListGatewaysRequest{Atespace: atespace})
 		if err != nil {
 			return fmt.Errorf("listing gateways: %w", err)
@@ -567,6 +570,9 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 	}
 
 	if (resource == "gateway" || resource == "gateways") && len(args) >= 2 {
+		if len(args) > 2 {
+			return fmt.Errorf("usage: ax get <gateway|gateways> <name> (unexpected extra argument %q)", args[2])
+		}
 		name := args[1]
 		gw, err := client.GetGateway(ctx, &v1alpha1.GetGatewayRequest{Atespace: atespace, Name: name})
 		if err != nil {
@@ -576,7 +582,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 		return yaml.NewEncoder(os.Stdout).Encode(gw)
 	}
 
-	if resource == "workspaces" || resource == "workspace" && len(args) == 1 {
+	if (resource == "workspaces" || resource == "workspace") && len(args) == 1 {
 		resp, err := client.ListWorkspaces(ctx, &v1alpha1.ListWorkspacesRequest{Atespace: atespace})
 		if err != nil {
 			return fmt.Errorf("listing workspaces: %w", err)
@@ -616,6 +622,9 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 	}
 
 	if (resource == "workspace" || resource == "workspaces") && len(args) >= 2 {
+		if len(args) > 2 {
+			return fmt.Errorf("usage: ax get <workspace|workspaces> <name> (unexpected extra argument %q)", args[2])
+		}
 		name := args[1]
 		ws, err := client.GetWorkspace(ctx, &v1alpha1.GetWorkspaceRequest{Atespace: atespace, Name: name})
 		if err != nil {
@@ -625,7 +634,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 		return yaml.NewEncoder(os.Stdout).Encode(ws)
 	}
 
-	if resource == "models" || resource == "model" && len(args) == 1 {
+	if (resource == "models" || resource == "model") && len(args) == 1 {
 		resp, err := client.ListModels(ctx, &v1alpha1.ListModelsRequest{Atespace: atespace})
 		if err != nil {
 			return fmt.Errorf("listing models: %w", err)
@@ -663,6 +672,9 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 	}
 
 	if (resource == "model" || resource == "models") && len(args) >= 2 {
+		if len(args) > 2 {
+			return fmt.Errorf("usage: ax get <model|models> <name> (unexpected extra argument %q)", args[2])
+		}
 		name := args[1]
 		m, err := client.GetModel(ctx, &v1alpha1.GetModelRequest{Atespace: atespace, Name: name})
 		if err != nil {

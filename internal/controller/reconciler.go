@@ -349,10 +349,15 @@ func (r *TaskReconciler) setCondition(task *v1alpha1.Task, condType, status, rea
 	ts := timestamppb.New(t)
 	for i, c := range task.Status.Conditions {
 		if c.Type == condType {
-			task.Status.Conditions[i].Status = status
 			task.Status.Conditions[i].Reason = reason
 			task.Status.Conditions[i].Message = message
-			task.Status.Conditions[i].LastTransitionTime = ts
+			// LastTransitionTime moves only on an actual status transition.
+			// Bumping it on every reconcile makes the timestamp meaningless
+			// and churns anything derived from the status.
+			if c.Status != status {
+				task.Status.Conditions[i].Status = status
+				task.Status.Conditions[i].LastTransitionTime = ts
+			}
 			return
 		}
 	}

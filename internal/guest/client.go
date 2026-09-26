@@ -98,6 +98,13 @@ func (c *Client) WaitReady(ctx context.Context) error {
 		if st == connectivity.Ready {
 			return nil
 		}
+		if st == connectivity.Shutdown {
+			// A closed connection never changes state again; without this,
+			// WaitForStateChange below would block until ctx expires even
+			// when ctx has no deadline, contradicting this function's
+			// contract.
+			return errors.New("guest: connection is closed")
+		}
 		if !c.grpcConn.WaitForStateChange(ctx, st) {
 			return fmt.Errorf("guest: connection not ready: %w", ctx.Err())
 		}

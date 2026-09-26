@@ -1342,25 +1342,33 @@ func sshTargetActor(task *v1alpha1.Task) string {
 	return fmt.Sprintf("%s/%s", atespace, task.Status.Actor)
 }
 
+// parseSSHCommand extracts the remote command from the ssh args (everything
+// after the task name). A "--" separator marks the rest of the line as the
+// command verbatim; the words after it are appended to any command words
+// already collected, so `ax ssh foo ls -- -a` runs `ls -a` instead of
+// silently dropping `ls`.
+func parseSSHCommand(args []string) []string {
+	var cmdToRun []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--" {
+			cmdToRun = append(cmdToRun, args[i+1:]...)
+			break
+		}
+		cmdToRun = append(cmdToRun, args[i])
+	}
+	if len(cmdToRun) == 0 {
+		cmdToRun = []string{"/bin/sh"}
+	}
+	return cmdToRun
+}
+
 func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: ax ssh <task-name> [-- command...]")
 	}
 
 	taskName := args[0]
-	var cmdToRun []string
-	for i := 1; i < len(args); i++ {
-		if args[i] == "--" {
-			cmdToRun = args[i+1:]
-			break
-		} else {
-			cmdToRun = append(cmdToRun, args[i])
-		}
-	}
-
-	if len(cmdToRun) == 0 {
-		cmdToRun = []string{"/bin/sh"}
-	}
+	cmdToRun := parseSSHCommand(args[1:])
 
 	client, conn, err := getAXClient(serverURL)
 	if err != nil {

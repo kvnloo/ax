@@ -399,3 +399,35 @@ func TestFormatCommandLine(t *testing.T) {
 		})
 	}
 }
+
+// parseSSHCommand must not discard command words collected before a "--"
+// separator. The old inline loop in runSSH replaced the collected command
+// with args[i+1:] when it hit "--", so `ax ssh foo ls -- -a` silently
+// dropped "ls" and tried to run "-a" as the command.
+func TestParseSSHCommand(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"no args defaults to shell", nil, []string{"/bin/sh"}},
+		{"plain command", []string{"ls", "-la"}, []string{"ls", "-la"}},
+		{"separator only", []string{"--"}, []string{"/bin/sh"}},
+		{"separator before command", []string{"--", "ls", "-la"}, []string{"ls", "-la"}},
+		{"words before separator are kept", []string{"ls", "--", "-a"}, []string{"ls", "-a"}},
+		{"double separator", []string{"--", "--", "x"}, []string{"--", "x"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseSSHCommand(tt.args)
+			if len(got) != len(tt.want) {
+				t.Fatalf("parseSSHCommand(%v) = %v, want %v", tt.args, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("parseSSHCommand(%v) = %v, want %v", tt.args, got, tt.want)
+				}
+			}
+		})
+	}
+}

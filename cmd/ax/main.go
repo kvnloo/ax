@@ -229,10 +229,17 @@ func runApply(serverURL string, args []string) error {
 	// Manifests are parsed here and submitted one resource at a time through the
 	// typed RPCs; the server never sees raw YAML.
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	var results []applyResult
 	for docIndex := 1; ; docIndex++ {
 		var doc yaml.Node
 		if err := decoder.Decode(&doc); err != nil {
 			if errors.Is(err, io.EOF) {
+				// The per-document lines above are the record of what
+				// happened; the footer aggregates them. A manifest with no
+				// real documents stays silent (unchanged behavior).
+				if len(results) > 0 {
+					fmt.Println(formatApplySummary(results))
+				}
 				return nil
 			}
 			return fmt.Errorf("decoding document %d: %w", docIndex, err)
@@ -246,6 +253,7 @@ func runApply(serverURL string, args []string) error {
 			return fmt.Errorf("applying document %d: %w", docIndex, err)
 		}
 		fmt.Printf("%s.ax.io/%s %s\n", strings.ToLower(kind), name, outcome)
+		results = append(results, applyResult{kind: kind, name: name, outcome: outcome})
 	}
 }
 
@@ -335,6 +343,46 @@ func applyOutcome(lookupErr error, existingSpec, newSpec proto.Message) (string,
 		return "unchanged", nil
 	}
 	return "configured", nil
+}
+
+// applyResult records one applied manifest document for the summary footer.
+type applyResult struct {
+	kind    string
+	name    string
+	outcome string
+}
+
+// formatApplySummary renders the aggregate footer printed after a successful
+// multi-document apply, e.g. "applied 4 resources: 2 created, 1 configured,
+// 1 unchanged". Outcome sections with zero counts are omitted; the section
+// order is fixed regardless of document order.
+func formatApplySummary(results []applyResult) string {
+	var created, configured, unchanged int
+	for _, r := range results {
+		switch r.outcome {
+		case "created":
+			created++
+		case "configured":
+			configured++
+		case "unchanged":
+			unchanged++
+		}
+	}
+	noun := "resources"
+	if len(results) == 1 {
+		noun = "resource"
+	}
+	var parts []string
+	if created > 0 {
+		parts = append(parts, fmt.Sprintf("%d created", created))
+	}
+	if configured > 0 {
+		parts = append(parts, fmt.Sprintf("%d configured", configured))
+	}
+	if unchanged > 0 {
+		parts = append(parts, fmt.Sprintf("%d unchanged", unchanged))
+	}
+	return fmt.Sprintf("applied %d %s: %s", len(results), noun, strings.Join(parts, ", "))
 }
 
 func runGet(serverURL, atespace string, args []string) error {

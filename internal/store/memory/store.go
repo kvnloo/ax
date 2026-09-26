@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"sync"
 	"time"
 
@@ -141,6 +142,23 @@ func (s *MemoryStore) ListTasks(ctx context.Context, atespace string, limit, off
 			result = append(result, cp)
 		}
 	}
+
+	// Limit/offset pagination assumes a stable order across calls, but Go
+	// map iteration is random: paging a fleet larger than one page saw
+	// duplicate rows and skipped rows. Sort newest-first like the Redis
+	// store (ZRevRange on the save-time index), tie-breaking on
+	// atespace/name so the order is fully deterministic.
+	sort.SliceStable(result, func(i, j int) bool {
+		ti := result[i].GetMetadata().GetCreationTimestamp().AsTime()
+		tj := result[j].GetMetadata().GetCreationTimestamp().AsTime()
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		if ai, aj := result[i].GetMetadata().GetAtespace(), result[j].GetMetadata().GetAtespace(); ai != aj {
+			return ai < aj
+		}
+		return result[i].GetMetadata().GetName() < result[j].GetMetadata().GetName()
+	})
 
 	if offset >= int64(len(result)) {
 		return []*v1alpha1.Task{}, nil

@@ -240,10 +240,18 @@ func ListTunnels() ([]*TunnelInfo, error) {
 
 	var results []*TunnelInfo
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".json") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		// Skip SaveTunnel's temp files: a crash between CreateTemp and
+		// Rename leaves an orphan .tmp-*.json behind, and one written after
+		// the payload was flushed holds a complete, valid TunnelInfo. It
+		// must never surface as a phantom tunnel in `ax tunnel list`.
+		if strings.HasPrefix(name, ".tmp-") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			continue
 		}

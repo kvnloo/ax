@@ -1165,6 +1165,9 @@ func runTunnel(args []string) error {
 
 	switch args[0] {
 	case "list":
+		if len(args) > 1 {
+			return fmt.Errorf("usage: ax tunnel list")
+		}
 		tunnels, err := tunnel.ListTunnels()
 		if err != nil {
 			return err
@@ -1186,6 +1189,9 @@ func runTunnel(args []string) error {
 		return w.Flush()
 
 	case "stop":
+		if len(args) > 2 {
+			return fmt.Errorf("usage: ax tunnel stop [context]")
+		}
 		if len(args) > 1 {
 			ctxName := args[1]
 			if err := tunnel.StopTunnelByContext(ctxName); err != nil {

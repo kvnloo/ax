@@ -241,3 +241,24 @@ func TestParseGlobalArgsFlagsBeforeCommand(t *testing.T) {
 		t.Fatalf("cleanArgs = %q, want [tasks]", cleanArgs)
 	}
 }
+
+// `ax tunnel list foo` and `ax tunnel stop ctx extra` silently ignore the
+// extra args today: list prints the table regardless, stop stops `ctx` and
+// drops `extra`. Both must be usage errors, like the other ax commands.
+func TestRunTunnelListExtraArgs(t *testing.T) {
+	if err := runTunnel([]string{"list", "foo"}); err == nil {
+		t.Fatalf("runTunnel(list, foo) = nil, want usage error")
+	} else if !strings.Contains(err.Error(), "usage") {
+		t.Fatalf("runTunnel(list, foo) error = %q, want usage error", err)
+	}
+}
+
+func TestRunTunnelStopExtraArgs(t *testing.T) {
+	err := runTunnel([]string{"stop", "foo", "extra"})
+	if err == nil {
+		t.Fatalf("runTunnel(stop, foo, extra) = nil, want usage error")
+	}
+	if !strings.Contains(err.Error(), "usage") {
+		t.Fatalf("runTunnel(stop, foo, extra) error = %q, want usage error", err)
+	}
+}

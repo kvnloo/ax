@@ -254,9 +254,12 @@ func EnsureServerURL(opts Options) (string, error) {
 		opts.Port = 8080
 	}
 
-	// Check for existing active tunnel
+	// Check for existing active tunnel. The recorded process must still be
+	// the kubectl port-forward that created the entry: a stale state file
+	// with a recycled port serving an unrelated /healthz 200 must be reaped,
+	// not adopted (see IsTunnelActive).
 	if existing, err := GetTunnel(ctxName); err == nil && existing != nil {
-		if IsTunnelHealthy(existing.Port) {
+		if IsTunnelActive(existing) {
 			return fmt.Sprintf("http://127.0.0.1:%d", existing.Port), nil
 		}
 		// Existing tunnel is unhealthy or stale, clean it up

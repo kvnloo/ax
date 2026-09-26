@@ -67,7 +67,7 @@ func main() {
 		printUsage()
 		return
 	case "ctx", "context":
-		if err := runContext(kubeContext); err != nil {
+		if err := runContext(kubeContext, cleanArgs); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -1417,7 +1417,15 @@ func formatAge(d time.Duration) string {
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
 
-func runContext(kubeContext string) error {
+func runContext(kubeContext string, args []string) error {
+	// ctx takes no positional args: anything after `ax ctx` is a typo
+	// (`ax ctx frobnicate` printed the context and silently dropped
+	// "frobnicate"). Same defect shape as get/describe/delete/watch/
+	// tunnel/apply, so it gets the same "unexpected extra argument" usage
+	// error instead of being silently ignored.
+	if len(args) > 0 {
+		return fmt.Errorf("usage: ax ctx (unexpected extra argument %q)", args[0])
+	}
 	ctxName, err := tunnel.CurrentContext(kubeContext)
 	if err != nil || ctxName == "" {
 		fmt.Println("No active Kubernetes context detected.")

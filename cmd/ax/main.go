@@ -134,10 +134,26 @@ func parseGlobalArgs(args []string) (cmd string, cleanArgs []string, atespace, e
 		arg := args[i]
 		if !noMoreFlags && arg == "--" {
 			noMoreFlags = true
-			cleanArgs = append(cleanArgs, arg)
+			// A "--" before the command is just a separator: `ax -- get
+			// tasks` still runs get. It is dropped from cleanArgs so it
+			// cannot land in the kind position; a "--" after the command
+			// is kept (ssh strips its own leading separator).
+			if cmd != "" {
+				cleanArgs = append(cleanArgs, arg)
+			}
 			continue
 		}
 		if noMoreFlags {
+			// The command word is still the command after "--": `ax -- get
+			// tasks` used to report "unknown command" because this branch
+			// never captured it. Only the first bare word wins; the "--"
+			// itself is dropped from cleanArgs so it cannot land in the kind
+			// position; a "--" after the command is kept (ssh strips its own
+			// leading separator).
+			if cmd == "" && !strings.HasPrefix(arg, "-") {
+				cmd = arg
+				continue
+			}
 			cleanArgs = append(cleanArgs, arg)
 			continue
 		}

@@ -1232,7 +1232,11 @@ func parseSuspendResumeName(verb string, args []string) (string, error) {
 	case 1:
 		return args[0], nil
 	case 2:
-		if args[0] == "task" || args[0] == "tasks" {
+		// The kind position is normalized like every other command (" task",
+		// "Tasks", "TASK" all mean the task kind): the old exact match on
+		// "task"/"tasks" treated `ax suspend " task" foo` as a bare name
+		// " task" and silently dropped the real name.
+		if kind, err := normalizeKind(args[0]); err == nil && kind == v1alpha1.KindTask {
 			return args[1], nil
 		}
 		return args[0], nil

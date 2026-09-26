@@ -304,6 +304,23 @@ func TestParseSuspendResumeName(t *testing.T) {
 	}
 }
 
+// The kind position in `ax suspend`/`ax resume` normalizes like every other
+// command: `ax suspend " task" foo` and `ax suspend Tasks foo` must resolve
+// the task kind, not treat the kind word as the task name and drop "foo".
+func TestParseSuspendResumeNameNormalizesKind(t *testing.T) {
+	for _, args := range [][]string{{" task", "foo"}, {"Tasks", "foo"}, {"TASK ", "foo"}} {
+		got, err := parseSuspendResumeName("suspend", args)
+		if err != nil || got != "foo" {
+			t.Errorf("parseSuspendResumeName(suspend, %q) = %q, %v; want %q, nil", args, got, err, "foo")
+		}
+	}
+	// The bare-name two-positional form is unchanged: a name that merely
+	// looks like a non-task word still resolves to the first word.
+	if got, err := parseSuspendResumeName("resume", []string{"foo", "bar"}); err != nil || got != "foo" {
+		t.Errorf("parseSuspendResumeName(resume, [foo bar]) = %q, %v; want %q, nil", got, err, "foo")
+	}
+}
+
 // A value-taking global flag as the last word silently keeps its default
 // today: `ax get tasks --server` swallows the flag and the CLI tunnels to
 // kube instead of failing. A trailing valueless flag must be an error. The

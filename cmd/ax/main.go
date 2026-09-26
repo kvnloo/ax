@@ -1573,16 +1573,18 @@ func dialRouterGuest(kubeContext, targetActor string) (*guest.Client, func(), er
 // without metadata, and dereferencing task.Metadata here panicked the CLI
 // after a successful GetTask. An empty actor is an error: a Running task
 // should always have one, and dialing "atespace/" would fail deep inside
-// the router with an opaque error instead of naming the real problem.
+// the router with an opaque error instead of naming the real problem. A
+// whitespace-only actor is the same defect: dialing "atespace/ " fails just
+// as opaquely, so it counts as missing too.
 func sshTargetActor(task *v1alpha1.Task) (string, error) {
-	if task == nil || task.Status == nil || task.Status.Actor == "" {
+	if task == nil || task.Status == nil || strings.TrimSpace(task.Status.Actor) == "" {
 		return "", fmt.Errorf("task %q has no actor assigned", sshTaskName(task))
 	}
 	atespace := ""
 	if task.Metadata != nil {
 		atespace = task.Metadata.Atespace
 	}
-	return fmt.Sprintf("%s/%s", atespace, task.Status.Actor), nil
+	return fmt.Sprintf("%s/%s", atespace, strings.TrimSpace(task.Status.Actor)), nil
 }
 
 // sshTaskName is the nil-safe task name for ssh error messages.
@@ -1667,7 +1669,7 @@ func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 		return fmt.Errorf("task %q does not expose guest services; set spec.debug: true and re-apply to enable ax ssh", taskName)
 	}
 
-	workerIP := task.Status.WorkerIp
+	workerIP := strings.TrimSpace(task.Status.WorkerIp)
 	if workerIP == "" {
 		return fmt.Errorf("task %q has no worker IP assigned", taskName)
 	}

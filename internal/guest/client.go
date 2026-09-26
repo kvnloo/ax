@@ -113,6 +113,22 @@ type ExecOptions struct {
 	Stderr  io.Writer
 }
 
+// signalKill best-effort delivers SIGKILL to the process group of a remote
+// process Exec started but can no longer observe. It runs on a fresh context
+// so it still works when the caller's ctx is already done, and its own
+// errors are swallowed: the process may already be gone.
+func (c *Client) signalKill(processID string) {
+	if processID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, _ = c.process.SignalProcess(ctx, &ateenvv1alpha.SignalProcessRequest{
+		ProcessId: processID,
+		Signal:    ateenvv1alpha.Signal_SIGNAL_KILL,
+	})
+}
+
 // Exec runs a command inside the task container and streams stdout/stderr until completion.
 // It returns the process exit code.
 func (c *Client) Exec(ctx context.Context, opts ExecOptions) (int, error) {
@@ -135,6 +151,8 @@ func (c *Client) Exec(ctx context.Context, opts ExecOptions) (int, error) {
 		Follow:    true,
 	})
 	if err != nil {
+		// Never got a working stream: the process would run on unobserved.
+		c.signalKill(pid)
 		return 1, fmt.Errorf("streaming process output: %w", err)
 	}
 
@@ -145,6 +163,9 @@ func (c *Client) Exec(ctx context.Context, opts ExecOptions) (int, error) {
 			break
 		}
 		if err != nil {
+			// Stream broke before the exit was observed: kill rather than
+			// orphan a running process nobody will reap.
+			c.signalKill(pid)
 			return 1, fmt.Errorf("receiving output stream: %w", err)
 		}
 		if exit := out.GetExit(); exit != nil {
@@ -162,6 +183,7 @@ func (c *Client) Exec(ctx context.Context, opts ExecOptions) (int, error) {
 	for {
 		proc, err := c.process.GetProcess(ctx, &ateenvv1alpha.GetProcessRequest{ProcessId: pid})
 		if err != nil {
+			c.signalKill(pid)
 			return 1, fmt.Errorf("getting process state: %w", err)
 		}
 		if proc.GetState() != ateenvv1alpha.ProcessState_PROCESS_STATE_RUNNING {
@@ -169,6 +191,9 @@ func (c *Client) Exec(ctx context.Context, opts ExecOptions) (int, error) {
 		}
 		select {
 		case <-ctx.Done():
+			// Caller gave up waiting: do not leave the process running
+			// unobserved behind.
+			c.signalKill(pid)
 			return 1, ctx.Err()
 		case <-time.After(50 * time.Millisecond):
 		}

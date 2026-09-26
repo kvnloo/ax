@@ -590,9 +590,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 			if t.Status != nil {
 				workerIP = t.Status.WorkerIp
 				actor = t.Status.Actor
-				if t.Status.Phase != "" {
-					phase = t.Status.Phase
-				}
+				phase = displayPhase(t.Status.Phase)
 			}
 			if workerIP == "" {
 				workerIP = "<none>"
@@ -1767,8 +1765,22 @@ func egressHostLabel(h *v1alpha1.HostRule) string {
 // "Pending" on creation — describe does the same instead of printing a
 // blank line for a status-less task.
 func describeTaskPhase(task *v1alpha1.Task) string {
-	if task != nil && task.Status != nil && task.Status.Phase != "" {
-		return task.Status.Phase
+	// A whitespace-only phase (reachable: the stores default only "" to
+	// "Pending") must read like the empty case, not render a blank field.
+	// displayPhase also serves the get-list PHASE column, so the rule lives
+	// in one place.
+	if task != nil && task.Status != nil {
+		return displayPhase(task.Status.Phase)
+	}
+	return "Pending"
+}
+
+// displayPhase renders a task phase for CLI display: whitespace-only counts
+// as unset and reads "Pending"; otherwise the trimmed value renders. Used by
+// `ax describe task` and the `ax get tasks` PHASE column.
+func displayPhase(phase string) string {
+	if p := strings.TrimSpace(phase); p != "" {
+		return p
 	}
 	return "Pending"
 }

@@ -141,12 +141,23 @@ func isPortForwardProcess(pid int) bool {
 	// On Linux, verify the command line before signaling. Where /proc is
 	// unavailable (other platforms) fall back to the liveness check above so
 	// behavior there is unchanged.
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
-	if err != nil {
-		return true
+	//
+	// During execve the kernel may briefly report an empty cmdline for a
+	// live process; poll briefly so a just-(re)exec'd port-forward is not
+	// misread as foreign. A zombie's cmdline stays empty and correctly
+	// reads as not-ours after the retries.
+	for i := 0; i < 5; i++ {
+		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+		if err != nil {
+			return true
+		}
+		if len(data) > 0 {
+			cmd := string(data)
+			return strings.Contains(cmd, "kubectl") && strings.Contains(cmd, "port-forward")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	cmd := string(data)
-	return strings.Contains(cmd, "kubectl") && strings.Contains(cmd, "port-forward")
+	return false
 }
 
 func StopTunnelByContext(ctxName string) error {
@@ -196,6 +207,19 @@ func IsTunnelHealthy(port int) bool {
 	}
 	_ = resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
+}
+
+// IsTunnelActive reports whether the tunnel described by info is genuinely
+// ours and responding: the recorded process must still be the kubectl
+// port-forward that created it (see isPortForwardProcess) and the local
+// health check must pass. A 200 from /healthz alone is not sufficient — a
+// state file can outlive its process while the OS recycles the port for an
+// unrelated local service, which would otherwise display as Active.
+func IsTunnelActive(info *TunnelInfo) bool {
+	if info == nil {
+		return false
+	}
+	return isPortForwardProcess(info.PID) && IsTunnelHealthy(info.Port)
 }
 
 // EnsureServerURL resolves the AX server URL.

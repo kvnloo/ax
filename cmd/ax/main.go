@@ -1053,7 +1053,7 @@ func runContext(kubeContext string) error {
 	fmt.Printf("Active Kubernetes Context: %s\n", ctxName)
 	if t, err := tunnel.GetTunnel(ctxName); err == nil && t != nil {
 		status := "Healthy"
-		if !tunnel.IsTunnelHealthy(t.Port) {
+		if !tunnel.IsTunnelActive(t) {
 			status = "Stale / Not responding"
 		}
 		fmt.Printf("AX Tunnel:                 http://127.0.0.1:%d -> %s/svc/%s:8080 (PID: %d, %s)\n",
@@ -1083,7 +1083,7 @@ func runTunnel(args []string) error {
 		fmt.Fprintln(w, "CONTEXT\tLOCAL PORT\tREMOTE SERVICE\tPID\tSTATUS\tCREATED")
 		for _, t := range tunnels {
 			status := "Active"
-			if !tunnel.IsTunnelHealthy(t.Port) {
+			if !tunnel.IsTunnelActive(t) {
 				status = "Stale"
 			}
 			fmt.Fprintf(w, "%s\t%d\t%s/%s\t%d\t%s\t%s\n",

@@ -93,20 +93,13 @@ func TestStopTunnelSkipsUnrelatedProcess(t *testing.T) {
 func TestStopTunnelKillsPortForwardProcess(t *testing.T) {
 	withTempAXHome(t)
 
-	// Fake kubectl: a copy of sleep whose argv[0] contains "kubectl" and whose
-	// args contain "port-forward", started in its own process group like the
-	// real tunnel spawn (Setpgid).
-	binDir := t.TempDir()
-	fakeKubectl := filepath.Join(binDir, "kubectl")
-	data, err := os.ReadFile("/bin/sleep")
-	if err != nil {
-		t.Skipf("no /bin/sleep: %v", err)
-	}
-	if err := os.WriteFile(fakeKubectl, data, 0755); err != nil {
-		t.Fatalf("write fake kubectl: %v", err)
-	}
-
-	cmd := exec.Command(fakeKubectl, "port-forward", "-n", "ax-system", "svc/ax-server", ":8080")
+	// Fake kubectl: long-lived sleep whose argv[0] carries the kubectl
+	// port-forward signature, started in its own process group like the
+	// real tunnel spawn (Setpgid). (A copied sleep binary run with
+	// port-forward args would exit immediately on the invalid interval,
+	// leaving a zombie — the kill assertion below would then pass
+	// vacuously.)
+	cmd := exec.Command("bash", "-c", "exec -a 'kubectl port-forward' sleep 300")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start fake kubectl: %v", err)

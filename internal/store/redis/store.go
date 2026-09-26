@@ -828,18 +828,28 @@ func (s *Store) WatchTask(ctx context.Context, atespace, name string) (<-chan *v
 	}
 
 	ch := make(chan *v1alpha1.Task, 10)
-	go func() {
-		defer close(ch)
-		msgCh := pubsub.Channel()
-		for msg := range msgCh {
-			var t v1alpha1.Task
-			if err := jsonUnmarshalOpts.Unmarshal([]byte(msg.Payload), &t); err == nil {
-				ch <- &t
-			}
-		}
-	}()
+	go watchForwardLoop(pubsub.Channel(), ch)
 
 	return ch, pubsub, nil
+}
+
+// watchForwardLoop decodes Redis pubsub payloads into task updates and
+// forwards them to ch until msgCh closes, then closes ch. The send is
+// deliberately non-blocking: a consumer that stopped reading (e.g. the
+// server's WatchTask returned after a terminal phase) must not pin this
+// goroutine forever on a full buffer. This matches MemoryStore.WatchTask,
+// which likewise drops to a slow consumer rather than blocking.
+func watchForwardLoop(msgCh <-chan *redis.Message, ch chan *v1alpha1.Task) {
+	defer close(ch)
+	for msg := range msgCh {
+		var t v1alpha1.Task
+		if err := jsonUnmarshalOpts.Unmarshal([]byte(msg.Payload), &t); err == nil {
+			select {
+			case ch <- &t:
+			default:
+			}
+		}
+	}
 }
 
 // Close closes the underlying Redis client connection.

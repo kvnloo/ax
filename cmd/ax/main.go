@@ -612,7 +612,10 @@ func runDescribe(serverURL, atespace string, args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: ax describe <task|gateway|workspace|model> <name>")
 	}
-	kind := strings.ToLower(args[0])
+	kind, err := normalizeKind(args[0])
+	if err != nil {
+		return err
+	}
 	name := args[1]
 
 	client, conn, err := getAXClient(serverURL)
@@ -624,7 +627,7 @@ func runDescribe(serverURL, atespace string, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if kind == "model" || kind == "models" {
+	if kind == v1alpha1.KindModel {
 		m, err := client.GetModel(ctx, &v1alpha1.GetModelRequest{Atespace: atespace, Name: name})
 		if err != nil {
 			return fmt.Errorf("getting model %q: %w", name, err)
@@ -665,7 +668,7 @@ func runDescribe(serverURL, atespace string, args []string) error {
 		return nil
 	}
 
-	if kind == "workspace" || kind == "workspaces" {
+	if kind == v1alpha1.KindWorkspace {
 		ws, err := client.GetWorkspace(ctx, &v1alpha1.GetWorkspaceRequest{Atespace: atespace, Name: name})
 		if err != nil {
 			return fmt.Errorf("getting workspace %q: %w", name, err)
@@ -723,7 +726,7 @@ func runDescribe(serverURL, atespace string, args []string) error {
 		return nil
 	}
 
-	if kind == "gateway" || kind == "gateways" {
+	if kind == v1alpha1.KindGateway {
 		gw, err := client.GetGateway(ctx, &v1alpha1.GetGatewayRequest{Atespace: atespace, Name: name})
 		if err != nil {
 			return fmt.Errorf("getting gateway %q: %w", name, err)
@@ -820,6 +823,13 @@ func runDescribe(serverURL, atespace string, args []string) error {
 func runWatch(serverURL, atespace string, args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: ax watch task <name>")
+	}
+	kind, err := normalizeKind(args[0])
+	if err != nil {
+		return err
+	}
+	if kind != v1alpha1.KindTask {
+		return fmt.Errorf("usage: ax watch task <name> (got kind %q)", args[0])
 	}
 	name := args[1]
 
@@ -973,7 +983,7 @@ func waitForDeletion(ctx context.Context, client v1alpha1.AXClient, kind, atespa
 // normalizeKind maps user-typed kinds ("task", "tasks", "Task") to the canonical
 // manifest kind, rejecting anything unknown.
 func normalizeKind(kind string) (string, error) {
-	switch strings.ToLower(strings.TrimSuffix(kind, "s")) {
+	switch strings.TrimSuffix(strings.ToLower(kind), "s") {
 	case "task":
 		return v1alpha1.KindTask, nil
 	case "gateway":

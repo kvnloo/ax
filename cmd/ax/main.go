@@ -1230,16 +1230,29 @@ func normalizeKind(kind string) (string, error) {
 }
 
 // manifestFromArgs returns the manifest named by -f/--file (or stdin for "-").
-// ok is false when no -f flag is present.
+// ok is false when no -f flag is present. The --file=<path> and -f=<path>
+// forms are accepted like Go's flag package: the old code only matched the
+// separate-token forms, so `ax apply --file=foo.yaml` fell through to
+// "missing required flag: -f <file>" even though the user did pass --file.
 func manifestFromArgs(args []string) (data []byte, ok bool, err error) {
 	for i := 0; i < len(args); i++ {
-		if args[i] != "-f" && args[i] != "--file" {
+		path, isFile := fileFlagValue(args[i])
+		if !isFile {
 			continue
 		}
-		if i+1 >= len(args) {
-			return nil, true, errors.New("-f requires a file path (or - for stdin)")
+		if path == "" {
+			// Bare "-f"/"--file": the path is the next arg. An attached
+			// "--file=" with nothing after it is the same missing-value
+			// error as a trailing bare "-f".
+			if args[i] == "-f" || args[i] == "--file" {
+				if i+1 >= len(args) {
+					return nil, true, errors.New("-f requires a file path (or - for stdin)")
+				}
+				path = args[i+1]
+			} else {
+				return nil, true, errors.New("-f requires a file path (or - for stdin)")
+			}
 		}
-		path := args[i+1]
 		if path == "-" {
 			data, err = io.ReadAll(os.Stdin)
 		} else {
@@ -1251,6 +1264,22 @@ func manifestFromArgs(args []string) (data []byte, ok bool, err error) {
 		return data, true, nil
 	}
 	return nil, false, nil
+}
+
+// fileFlagValue reports whether arg is apply's -f/--file flag and, for the
+// =value forms, the attached path. A bare "-f"/"--file" returns isFile with
+// an empty path: the caller reads the next arg.
+func fileFlagValue(arg string) (path string, isFile bool) {
+	if arg == "-f" || arg == "--file" {
+		return "", true
+	}
+	if strings.HasPrefix(arg, "--file=") {
+		return strings.TrimPrefix(arg, "--file="), true
+	}
+	if strings.HasPrefix(arg, "-f=") {
+		return strings.TrimPrefix(arg, "-f="), true
+	}
+	return "", false
 }
 
 func runSuspend(serverURL, atespace string, args []string) error {

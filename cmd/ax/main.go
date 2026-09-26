@@ -592,10 +592,10 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 				actor = t.Status.Actor
 				phase = displayPhase(t.Status.Phase)
 			}
-			if workerIP == "" {
+			if strings.TrimSpace(workerIP) == "" {
 				workerIP = "<none>"
 			}
-			if actor == "" {
+			if strings.TrimSpace(actor) == "" {
 				actor = "<none>"
 			}
 			age := "<unknown>"
@@ -1786,7 +1786,7 @@ func displayPhase(phase string) string {
 }
 
 func listenerProtocol(l *v1alpha1.Listener) string {
-	if l == nil || l.Protocol == "" {
+	if l == nil || strings.TrimSpace(l.Protocol) == "" {
 		return ""
 	}
 	return l.Protocol

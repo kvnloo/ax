@@ -261,6 +261,15 @@ func runApply(serverURL string, args []string) error {
 		return fmt.Errorf("missing required flag: -f <file>")
 	}
 
+	// apply takes no positional args: anything besides -f/--file and its
+	// value is a typo (`ax apply -f foo.yaml bar` applied the manifest and
+	// silently dropped "bar"). Same defect shape as get/describe/delete/
+	// watch/tunnel, so it gets the same "unexpected extra argument" usage
+	// error. Checked before dialing, like the other commands.
+	if err := validateApplyPositionals(args); err != nil {
+		return err
+	}
+
 	client, conn, err := getAXClient(serverURL)
 	if err != nil {
 		return err
@@ -271,6 +280,23 @@ func runApply(serverURL string, args []string) error {
 	defer cancel()
 
 	return applyManifests(ctx, client, data)
+}
+
+// validateApplyPositionals rejects stray positional args for `ax apply`:
+// the command takes only -f/--file, so anything else is a typo. The -f
+// flag value and other flags pass through untouched.
+func validateApplyPositionals(args []string) error {
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-f" || args[i] == "--file" {
+			i++ // skip the flag value
+			continue
+		}
+		if strings.HasPrefix(args[i], "-") {
+			continue // other flags pass through untouched
+		}
+		return fmt.Errorf("usage: ax apply -f <file> (unexpected extra argument %q)", args[i])
+	}
+	return nil
 }
 
 // applyManifests applies each document of a multi-document manifest in order.

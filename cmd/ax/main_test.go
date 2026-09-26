@@ -321,6 +321,37 @@ func TestParseSuspendResumeNameNormalizesKind(t *testing.T) {
 	}
 }
 
+// `ax apply -f foo.yaml bar` must be a usage error: apply takes no
+// positional args, and the extra word used to be silently dropped while the
+// manifest was applied. The check runs before dialing, so a stray word never
+// costs a server round-trip.
+func TestApplyRejectsExtraPositional(t *testing.T) {
+	if err := validateApplyPositionals([]string{"-f", "foo.yaml", "bar"}); err == nil ||
+		!strings.Contains(err.Error(), `unexpected extra argument "bar"`) {
+		t.Fatalf("validateApplyPositionals = %v, want unexpected extra argument", err)
+	}
+	// the -f value and other flags are not positionals
+	if err := validateApplyPositionals([]string{"-f", "foo.yaml"}); err != nil {
+		t.Fatalf("validateApplyPositionals(-f foo.yaml) = %v, want nil", err)
+	}
+	if err := validateApplyPositionals([]string{"--file", "foo.yaml"}); err != nil {
+		t.Fatalf("validateApplyPositionals(--file foo.yaml) = %v, want nil", err)
+	}
+}
+
+func TestRunApplyExtraPositionalRejectedBeforeDial(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "m.yaml")
+	manifest := "kind: Task\nmetadata:\n  name: one\n  atespace: default\nspec: {}\n"
+	if err := os.WriteFile(f, []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := runApply("http://127.0.0.1:1", []string{"-f", f, "extra"})
+	if err == nil || !strings.Contains(err.Error(), `unexpected extra argument "extra"`) {
+		t.Fatalf("runApply = %v, want unexpected extra argument", err)
+	}
+}
+
 // A value-taking global flag as the last word silently keeps its default
 // today: `ax get tasks --server` swallows the flag and the CLI tunnels to
 // kube instead of failing. A trailing valueless flag must be an error. The

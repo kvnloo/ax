@@ -656,13 +656,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 				listenersStr = "<none>"
 			}
 
-			var hostList []string
-			if g.Spec != nil && g.Spec.Egress != nil && g.Spec.Egress.Allowlist != nil {
-				for _, h := range g.Spec.Egress.Allowlist.Hosts {
-					hostList = append(hostList, h.Host)
-				}
-			}
-			egressStr := strings.Join(hostList, ",")
+			egressStr := egressHostsLabel(g.GetSpec().GetEgress().GetAllowlist().GetHosts())
 			if egressStr == "" {
 				egressStr = "<none>"
 			}
@@ -957,10 +951,10 @@ func runDescribe(serverURL, atespace string, args []string) error {
 					}
 				}
 			}
-			if gw.Spec.Egress != nil && gw.Spec.Egress.Allowlist != nil && len(gw.Spec.Egress.Allowlist.Hosts) > 0 {
+			if hosts := egressHostList(gw.GetSpec().GetEgress().GetAllowlist().GetHosts()); len(hosts) > 0 {
 				fmt.Println("Egress Allowlist:")
-				for _, h := range gw.Spec.Egress.Allowlist.Hosts {
-					fmt.Printf("  - %s\n", egressHostLabel(h))
+				for _, host := range hosts {
+					fmt.Printf("  - %s\n", host)
 				}
 			}
 		}
@@ -1773,6 +1767,26 @@ func egressHostLabel(h *v1alpha1.HostRule) string {
 		return ""
 	}
 	return h.Host
+}
+
+// egressHostList renders the hosts of a gateway egress allowlist for CLI
+// display: each host is trimmed and whitespace-only hosts are dropped (they
+// rendered as blank entries in the list and describe views), matching the
+// whitespace-as-empty rule the task actor/workerIP columns follow.
+func egressHostList(hosts []*v1alpha1.HostRule) []string {
+	var out []string
+	for _, h := range hosts {
+		if host := strings.TrimSpace(egressHostLabel(h)); host != "" {
+			out = append(out, host)
+		}
+	}
+	return out
+}
+
+// egressHostsLabel joins the display hosts for the get-list EGRESS-HOSTS
+// column.
+func egressHostsLabel(hosts []*v1alpha1.HostRule) string {
+	return strings.Join(egressHostList(hosts), ",")
 }
 
 // describeTaskPhase is the Phase line for `ax describe task`. The get list

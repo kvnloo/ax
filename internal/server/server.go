@@ -74,10 +74,7 @@ func (s *Server) GetTask(ctx context.Context, req *v1alpha1.GetTaskRequest) (*v1
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "missing request")
 	}
-	atespace := req.Atespace
-	if atespace == "" {
-		atespace = "default"
-	}
+	atespace := defaultAtespace(req.Atespace)
 	task, err := s.store.GetTask(ctx, atespace, req.Name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -101,13 +98,11 @@ func (s *Server) ListTasks(ctx context.Context, req *v1alpha1.ListTasksRequest) 
 			offset = req.Offset
 		}
 	}
-	// An empty atespace means the default atespace, like the Get/Delete
-	// handlers already do: without this, `ax --atespace= get tasks` passed
-	// "" to the stores, where it is the cross-atespace wildcard, and listed
-	// every atespace instead of just "default".
-	if atespace == "" {
-		atespace = "default"
-	}
+	// Empty or whitespace-only atespace means "default" (defaultAtespace):
+	// without the empty fold, `ax --atespace= get tasks` passed "" to the
+	// stores, where it is the cross-atespace wildcard, and listed every
+	// atespace instead of just "default".
+	atespace = defaultAtespace(atespace)
 	tasks, err := s.store.ListTasks(ctx, atespace, limit, offset)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "listing tasks: %v", err)
@@ -140,10 +135,7 @@ func (s *Server) DeleteTask(ctx context.Context, req *v1alpha1.DeleteTaskRequest
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "missing request")
 	}
-	atespace := req.Atespace
-	if atespace == "" {
-		atespace = "default"
-	}
+	atespace := defaultAtespace(req.Atespace)
 	// Deletion is two-phase: mark the task Terminating and let the controller tear
 	// down the actor before the record is removed. Clients poll GetTask for NotFound.
 	if err := s.store.MarkTaskDeleting(ctx, atespace, req.Name); err != nil {
@@ -159,10 +151,7 @@ func (s *Server) SuspendTask(ctx context.Context, req *v1alpha1.SuspendTaskReque
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "missing request")
 	}
-	atespace := req.Atespace
-	if atespace == "" {
-		atespace = "default"
-	}
+	atespace := defaultAtespace(req.Atespace)
 	task, err := s.store.GetTask(ctx, atespace, req.Name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -184,10 +173,7 @@ func (s *Server) ResumeTask(ctx context.Context, req *v1alpha1.ResumeTaskRequest
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "missing request")
 	}
-	atespace := req.Atespace
-	if atespace == "" {
-		atespace = "default"
-	}
+	atespace := defaultAtespace(req.Atespace)
 	task, err := s.store.GetTask(ctx, atespace, req.Name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -209,10 +195,7 @@ func (s *Server) WatchTask(req *v1alpha1.WatchTaskRequest, stream grpc.ServerStr
 	if req == nil {
 		return status.Error(codes.InvalidArgument, "missing request")
 	}
-	atespace := req.Atespace
-	if atespace == "" {
-		atespace = "default"
-	}
+	atespace := defaultAtespace(req.Atespace)
 	ctx := stream.Context()
 	ch, closer, err := s.store.WatchTask(ctx, atespace, req.Name)
 	if err != nil {
@@ -278,10 +261,7 @@ func (s *Server) GetGateway(ctx context.Context, req *v1alpha1.GetGatewayRequest
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "missing request")
 	}
-	atespace := req.Atespace
-	if atespace == "" {
-		atespace = "default"
-	}
+	atespace := defaultAtespace(req.Atespace)
 	gw, err := s.store.GetGateway(ctx, atespace, req.Name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -297,13 +277,11 @@ func (s *Server) ListGateways(ctx context.Context, req *v1alpha1.ListGatewaysReq
 	if req != nil {
 		atespace = req.Atespace
 	}
-	// An empty atespace means the default atespace, like the Get/Delete
-	// handlers already do: without this, `ax --atespace= get tasks` passed
-	// "" to the stores, where it is the cross-atespace wildcard, and listed
-	// every atespace instead of just "default".
-	if atespace == "" {
-		atespace = "default"
-	}
+	// Empty or whitespace-only atespace means "default" (defaultAtespace):
+	// without the empty fold, `ax --atespace= get tasks` passed "" to the
+	// stores, where it is the cross-atespace wildcard, and listed every
+	// atespace instead of just "default".
+	atespace = defaultAtespace(atespace)
 	gateways, err := s.store.ListGateways(ctx, atespace)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "listing gateways: %v", err)
@@ -332,10 +310,7 @@ func (s *Server) DeleteGateway(ctx context.Context, req *v1alpha1.DeleteGatewayR
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "missing request")
 	}
-	atespace := req.Atespace
-	if atespace == "" {
-		atespace = "default"
-	}
+	atespace := defaultAtespace(req.Atespace)
 	if err := s.store.DeleteGateway(ctx, atespace, req.Name); err != nil {
 		return nil, status.Errorf(codes.Internal, "deleting gateway: %v", err)
 	}
@@ -348,10 +323,7 @@ func (s *Server) GetWorkspace(ctx context.Context, req *v1alpha1.GetWorkspaceReq
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "missing request")
 	}
-	atespace := req.Atespace
-	if atespace == "" {
-		atespace = "default"
-	}
+	atespace := defaultAtespace(req.Atespace)
 	ws, err := s.store.GetWorkspace(ctx, atespace, req.Name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -367,13 +339,11 @@ func (s *Server) ListWorkspaces(ctx context.Context, req *v1alpha1.ListWorkspace
 	if req != nil {
 		atespace = req.Atespace
 	}
-	// An empty atespace means the default atespace, like the Get/Delete
-	// handlers already do: without this, `ax --atespace= get tasks` passed
-	// "" to the stores, where it is the cross-atespace wildcard, and listed
-	// every atespace instead of just "default".
-	if atespace == "" {
-		atespace = "default"
-	}
+	// Empty or whitespace-only atespace means "default" (defaultAtespace):
+	// without the empty fold, `ax --atespace= get tasks` passed "" to the
+	// stores, where it is the cross-atespace wildcard, and listed every
+	// atespace instead of just "default".
+	atespace = defaultAtespace(atespace)
 	workspaces, err := s.store.ListWorkspaces(ctx, atespace)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "listing workspaces: %v", err)
@@ -402,10 +372,7 @@ func (s *Server) DeleteWorkspace(ctx context.Context, req *v1alpha1.DeleteWorksp
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "missing request")
 	}
-	atespace := req.Atespace
-	if atespace == "" {
-		atespace = "default"
-	}
+	atespace := defaultAtespace(req.Atespace)
 	if err := s.store.DeleteWorkspace(ctx, atespace, req.Name); err != nil {
 		return nil, status.Errorf(codes.Internal, "deleting workspace: %v", err)
 	}
@@ -418,10 +385,7 @@ func (s *Server) GetModel(ctx context.Context, req *v1alpha1.GetModelRequest) (*
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "missing request")
 	}
-	atespace := req.Atespace
-	if atespace == "" {
-		atespace = "default"
-	}
+	atespace := defaultAtespace(req.Atespace)
 	model, err := s.store.GetModel(ctx, atespace, req.Name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -437,13 +401,11 @@ func (s *Server) ListModels(ctx context.Context, req *v1alpha1.ListModelsRequest
 	if req != nil {
 		atespace = req.Atespace
 	}
-	// An empty atespace means the default atespace, like the Get/Delete
-	// handlers already do: without this, `ax --atespace= get tasks` passed
-	// "" to the stores, where it is the cross-atespace wildcard, and listed
-	// every atespace instead of just "default".
-	if atespace == "" {
-		atespace = "default"
-	}
+	// Empty or whitespace-only atespace means "default" (defaultAtespace):
+	// without the empty fold, `ax --atespace= get tasks` passed "" to the
+	// stores, where it is the cross-atespace wildcard, and listed every
+	// atespace instead of just "default".
+	atespace = defaultAtespace(atespace)
 	models, err := s.store.ListModels(ctx, atespace)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "listing models: %v", err)
@@ -468,6 +430,18 @@ func (s *Server) UpdateModel(ctx context.Context, req *v1alpha1.UpdateModelReque
 	return req.Model, nil
 }
 
+// defaultAtespace normalizes the atespace a request carries: empty (and
+// whitespace-only, e.g. `ax -a=" " get tasks`) means "default". Without the
+// whitespace fold, " " passed through to the stores, where it exact-matches
+// nothing and silently returned empty results instead of the default
+// atespace's resources. Non-empty values pass through untouched.
+func defaultAtespace(atespace string) string {
+	if strings.TrimSpace(atespace) == "" {
+		return "default"
+	}
+	return atespace
+}
+
 // defaultMetadata normalizes resource metadata before a save: a missing atespace
 // becomes "default", and the creation timestamp is carried over from the existing
 // resource (looked up via existing) or set to now for a new one.
@@ -475,9 +449,7 @@ func defaultMetadata(meta *v1alpha1.ObjectMeta, existing func(atespace, name str
 	if meta == nil {
 		meta = &v1alpha1.ObjectMeta{}
 	}
-	if meta.Atespace == "" {
-		meta.Atespace = "default"
-	}
+	meta.Atespace = defaultAtespace(meta.Atespace)
 	if meta.CreationTimestamp == nil {
 		if prev := existing(meta.Atespace, meta.Name); prev.GetCreationTimestamp() != nil {
 			meta.CreationTimestamp = prev.GetCreationTimestamp()
@@ -492,10 +464,7 @@ func (s *Server) DeleteModel(ctx context.Context, req *v1alpha1.DeleteModelReque
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "missing request")
 	}
-	atespace := req.Atespace
-	if atespace == "" {
-		atespace = "default"
-	}
+	atespace := defaultAtespace(req.Atespace)
 	if err := s.store.DeleteModel(ctx, atespace, req.Name); err != nil {
 		return nil, status.Errorf(codes.Internal, "deleting model: %v", err)
 	}

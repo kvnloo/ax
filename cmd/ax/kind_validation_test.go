@@ -17,6 +17,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/google/ax/pkg/apis/v1alpha1"
 )
 
 // Validation happens before any RPC, so these tests need no server: the
@@ -61,5 +63,24 @@ func TestNormalizeKindPlurals(t *testing.T) {
 	}
 	if _, err := normalizeKind("typo"); err == nil {
 		t.Fatal("normalizeKind(typo): want error")
+	}
+}
+
+// Leading/trailing whitespace around a kind (easy to paste from docs) must
+// not turn into "unsupported kind".
+func TestNormalizeKindTrimsWhitespace(t *testing.T) {
+	for k, want := range map[string]string{
+		" task":        v1alpha1.KindTask,
+		"task ":        v1alpha1.KindTask,
+		"  GATEWAYS  ": v1alpha1.KindGateway,
+		"\tmodel\n":    v1alpha1.KindModel,
+	} {
+		got, err := normalizeKind(k)
+		if err != nil {
+			t.Fatalf("normalizeKind(%q): %v", k, err)
+		}
+		if got != want {
+			t.Errorf("normalizeKind(%q) = %q, want %q", k, got, want)
+		}
 	}
 }

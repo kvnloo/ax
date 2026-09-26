@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -474,29 +475,7 @@ func PortForward(ctx context.Context, kubeContext, namespace, targetResource str
 	portChan := make(chan int, 1)
 	errChan := make(chan error, 1)
 
-	go func() {
-		buf := make([]byte, 1024)
-		var output strings.Builder
-		for {
-			n, err := pr.Read(buf)
-			if n > 0 {
-				output.Write(buf[:n])
-				if match := portForwardRegex.FindStringSubmatch(output.String()); len(match) > 1 {
-					p, convErr := strconv.Atoi(match[1])
-					if convErr == nil && p > 0 {
-						portChan <- p
-					}
-				}
-			}
-			if err != nil {
-				select {
-				case errChan <- fmt.Errorf("kubectl port-forward exited: %s", strings.TrimSpace(output.String())):
-				default:
-				}
-				return
-			}
-		}
-	}()
+	go scanPortForwardOutput(pr, portChan, errChan)
 
 	cleanup := func() {
 		_ = pr.Close()
@@ -519,5 +498,39 @@ func PortForward(ctx context.Context, kubeContext, namespace, targetResource str
 	case <-ctx.Done():
 		cleanup()
 		return 0, nil, ctx.Err()
+	}
+}
+
+// scanPortForwardOutput watches kubectl port-forward's stdout for the local
+// port assignment line and reports it on portChan. Only the FIRST match is
+// delivered: kubectl reprints the forwarding line (and "Handling connection"
+// lines keep the accumulated buffer matching), and portChan carries a single
+// buffered slot consumed exactly once by PortForward — resending would block
+// the watcher goroutine forever on a channel nobody will read again,
+// leaking the goroutine for the life of the process.
+func scanPortForwardOutput(r io.Reader, portChan chan<- int, errChan chan<- error) {
+	buf := make([]byte, 1024)
+	var output strings.Builder
+	sent := false
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			output.Write(buf[:n])
+			if !sent {
+				if match := portForwardRegex.FindStringSubmatch(output.String()); len(match) > 1 {
+					if p, convErr := strconv.Atoi(match[1]); convErr == nil && p > 0 {
+						sent = true
+						portChan <- p
+					}
+				}
+			}
+		}
+		if err != nil {
+			select {
+			case errChan <- fmt.Errorf("kubectl port-forward exited: %s", strings.TrimSpace(output.String())):
+			default:
+			}
+			return
+		}
 	}
 }

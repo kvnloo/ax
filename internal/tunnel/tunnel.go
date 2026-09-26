@@ -378,6 +378,22 @@ func detachReap(cmd *exec.Cmd) {
 	go func() { _ = cmd.Wait() }()
 }
 
+// childExited reports whether pid — a child of this process started via
+// os/exec — has already exited. A non-blocking waitpid both detects and
+// reaps the exit, so the child never lingers as a zombie. Signal 0 is not a
+// substitute: an unreaped child is a zombie and still answers signal 0,
+// which made spawnTunnel's premature-exit probe blind to fast kubectl
+// failures (they fell through to the 5s timeout path instead of failing
+// fast with kubectl's own error output).
+//
+// Note: the WNOHANG waitpid reaps the child, so a later cmd.Wait on the same
+// *exec.Cmd returns an error; callers must ignore it.
+func childExited(pid int) bool {
+	var status syscall.WaitStatus
+	wpid, err := syscall.Wait4(pid, &status, syscall.WNOHANG, nil)
+	return err == nil && wpid == pid
+}
+
 // spawnTunnel starts a background kubectl port-forward for ctxName, waits for
 // the local port assignment and a passing health check, records the tunnel
 // state, and returns the server URL. Callers must hold the tunnel lock (see
@@ -433,8 +449,11 @@ func spawnTunnel(ctxName, dir string, opts Options) (string, error) {
 			}
 		}
 
-		// Check if command exited prematurely
-		if err := syscall.Kill(cmd.Process.Pid, 0); err != nil {
+		// Check if command exited prematurely. Signal 0 cannot tell: our own
+		// unreaped child is a zombie and still answers signal 0, so use the
+		// zombie-aware probe. childExited reaps the exit via WNOHANG, so no
+		// further cleanup of the child is needed on this path.
+		if childExited(cmd.Process.Pid) {
 			return "", fmt.Errorf("kubectl port-forward exited for context %q: %s", ctxName, strings.TrimSpace(string(logData)))
 		}
 	}

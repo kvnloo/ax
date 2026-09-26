@@ -196,6 +196,9 @@ func StopTunnelByContext(ctxName string) error {
 	return withTunnelLock(dir, func() error {
 		info, err := GetTunnel(ctxName)
 		if err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("no tunnel running for context %q", ctxName)
+			}
 			return err
 		}
 		return StopTunnel(info)

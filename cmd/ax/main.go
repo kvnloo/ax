@@ -337,12 +337,46 @@ func applyOutcome(lookupErr error, existingSpec, newSpec proto.Message) (string,
 	return "configured", nil
 }
 
-func runGet(serverURL, atespace string, args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("specify resource to get (e.g. 'ax get tasks' or 'ax get task <name>')")
-	}
+// getTarget is the parsed form of "ax get <resource> [name]".
+type getTarget struct {
+	kind string // canonical kind: v1alpha1.KindTask, KindGateway, KindWorkspace, KindModel
+	name string // empty when listing
+}
 
-	resource := strings.ToLower(args[0])
+// parseGetArgs resolves "ax get" arguments to a resource kind and an
+// optional name without touching the network, so the list-vs-get decision
+// stays unit-testable.
+func parseGetArgs(args []string) (getTarget, error) {
+	if len(args) == 0 {
+		return getTarget{}, fmt.Errorf("specify resource to get (e.g. 'ax get tasks' or 'ax get task <name>')")
+	}
+	// Every command normalizes kinds through normalizeKind, so "tasks",
+	// "TASKS" and "Task" resolve to the same canonical kind here as they
+	// do in describe, delete, watch, suspend and resume.
+	kind, err := normalizeKind(args[0])
+	if err != nil {
+		return getTarget{}, err
+	}
+	t := getTarget{kind: kind}
+	if len(args) >= 2 {
+		t.name = args[1]
+	}
+	// Preserve fork-main (pre-#383) precedence: a plural resource word
+	// lists even when a name follows ("ax get tasks mytask" lists), mirroring
+	// the base condition resource=="tasks" || (resource=="task" && len(args)==1).
+	// The plural-with-name get form is Kevin's fix/get-plural-name-383 lane;
+	// this branch must not change it.
+	if strings.HasSuffix(strings.ToLower(args[0]), "s") {
+		t.name = ""
+	}
+	return t, nil
+}
+
+func runGet(serverURL, atespace string, args []string) error {
+	target, err := parseGetArgs(args)
+	if err != nil {
+		return err
+	}
 
 	client, conn, err := getAXClient(serverURL)
 	if err != nil {
@@ -353,221 +387,232 @@ func runGet(serverURL, atespace string, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if resource == "tasks" || resource == "task" && len(args) == 1 {
-		resp, err := client.ListTasks(ctx, &v1alpha1.ListTasksRequest{Atespace: atespace})
-		if err != nil {
-			return fmt.Errorf("listing tasks: %w", err)
-		}
+	switch target.kind {
+	case v1alpha1.KindTask:
+		if target.name == "" {
+			resp, err := client.ListTasks(ctx, &v1alpha1.ListTasksRequest{Atespace: atespace})
+			if err != nil {
+				return fmt.Errorf("listing tasks: %w", err)
+			}
 
-		tasks := resp.Tasks
+			tasks := resp.Tasks
 
-		w := tabwriter.NewWriter(os.Stdout, 0, 8, 3, ' ', 0)
-		fmt.Fprintln(w, "NAME\tATESPACE\tPHASE\tACTOR\tWORKER-IP\tAGE")
-		for _, t := range tasks {
-			workerIP := ""
-			actor := ""
-			phase := "Pending"
-			if t.Status != nil {
-				workerIP = t.Status.WorkerIp
-				actor = t.Status.Actor
-				if t.Status.Phase != "" {
-					phase = t.Status.Phase
+			w := tabwriter.NewWriter(os.Stdout, 0, 8, 3, ' ', 0)
+			fmt.Fprintln(w, "NAME\tATESPACE\tPHASE\tACTOR\tWORKER-IP\tAGE")
+			for _, t := range tasks {
+				workerIP := ""
+				actor := ""
+				phase := "Pending"
+				if t.Status != nil {
+					workerIP = t.Status.WorkerIp
+					actor = t.Status.Actor
+					if t.Status.Phase != "" {
+						phase = t.Status.Phase
+					}
 				}
-			}
-			if workerIP == "" {
-				workerIP = "<none>"
-			}
-			if actor == "" {
-				actor = "<none>"
-			}
-			age := "<unknown>"
-			name := ""
-			tAtespace := ""
-			if t.Metadata != nil {
-				name = t.Metadata.Name
-				tAtespace = t.Metadata.Atespace
-				if t.Metadata.CreationTimestamp != nil {
-					age = formatAge(time.Since(t.Metadata.CreationTimestamp.AsTime()))
+				if workerIP == "" {
+					workerIP = "<none>"
 				}
+				if actor == "" {
+					actor = "<none>"
+				}
+				age := "<unknown>"
+				name := ""
+				tAtespace := ""
+				if t.Metadata != nil {
+					name = t.Metadata.Name
+					tAtespace = t.Metadata.Atespace
+					if t.Metadata.CreationTimestamp != nil {
+						age = formatAge(time.Since(t.Metadata.CreationTimestamp.AsTime()))
+					}
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					name,
+					tAtespace,
+					phase,
+					actor,
+					workerIP,
+					age,
+				)
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-				name,
-				tAtespace,
-				phase,
-				actor,
-				workerIP,
-				age,
-			)
+			return w.Flush()
 		}
-		return w.Flush()
-	}
-
-	if (resource == "task" || resource == "tasks") && len(args) >= 2 {
-		name := args[1]
+		name := target.name
 		task, err := client.GetTask(ctx, &v1alpha1.GetTaskRequest{Atespace: atespace, Name: name})
 		if err != nil {
 			return fmt.Errorf("getting task %q: %w", name, err)
 		}
 
 		return yaml.NewEncoder(os.Stdout).Encode(task)
-	}
+	case v1alpha1.KindGateway:
+		if target.name == "" {
+			resp, err := client.ListGateways(ctx, &v1alpha1.ListGatewaysRequest{Atespace: atespace})
+			if err != nil {
+				return fmt.Errorf("listing gateways: %w", err)
+			}
 
-	if resource == "gateways" || resource == "gateway" && len(args) == 1 {
-		resp, err := client.ListGateways(ctx, &v1alpha1.ListGatewaysRequest{Atespace: atespace})
-		if err != nil {
-			return fmt.Errorf("listing gateways: %w", err)
-		}
+			gateways := resp.Gateways
 
-		gateways := resp.Gateways
-
-		w := tabwriter.NewWriter(os.Stdout, 0, 8, 3, ' ', 0)
-		fmt.Fprintln(w, "NAME\tATESPACE\tLISTENERS\tEGRESS-HOSTS")
-		for _, g := range gateways {
-			var listenerList []string
-			if g.Spec != nil {
-				for _, l := range g.Spec.Listeners {
-					listenerList = append(listenerList, fmt.Sprintf("%d/%s", l.Port, l.Protocol))
+			w := tabwriter.NewWriter(os.Stdout, 0, 8, 3, ' ', 0)
+			fmt.Fprintln(w, "NAME\tATESPACE\tLISTENERS\tEGRESS-HOSTS")
+			for _, g := range gateways {
+				var listenerList []string
+				if g.Spec != nil {
+					for _, l := range g.Spec.Listeners {
+						listenerList = append(listenerList, fmt.Sprintf("%d/%s", l.Port, l.Protocol))
+					}
 				}
-			}
-			listenersStr := strings.Join(listenerList, ",")
-			if listenersStr == "" {
-				listenersStr = "<none>"
-			}
-
-			var hostList []string
-			if g.Spec != nil && g.Spec.Egress != nil && g.Spec.Egress.Allowlist != nil {
-				for _, h := range g.Spec.Egress.Allowlist.Hosts {
-					hostList = append(hostList, h.Host)
+				listenersStr := strings.Join(listenerList, ",")
+				if listenersStr == "" {
+					listenersStr = "<none>"
 				}
-			}
-			egressStr := strings.Join(hostList, ",")
-			if egressStr == "" {
-				egressStr = "<none>"
-			}
 
-			name := ""
-			gwAtespace := ""
-			if g.Metadata != nil {
-				name = g.Metadata.Name
-				gwAtespace = g.Metadata.Atespace
+				var hostList []string
+				if g.Spec != nil && g.Spec.Egress != nil && g.Spec.Egress.Allowlist != nil {
+					for _, h := range g.Spec.Egress.Allowlist.Hosts {
+						hostList = append(hostList, h.Host)
+					}
+				}
+				egressStr := strings.Join(hostList, ",")
+				if egressStr == "" {
+					egressStr = "<none>"
+				}
+
+				name := ""
+				gwAtespace := ""
+				if g.Metadata != nil {
+					name = g.Metadata.Name
+					gwAtespace = g.Metadata.Atespace
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+					name,
+					gwAtespace,
+					listenersStr,
+					egressStr,
+				)
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-				name,
-				gwAtespace,
-				listenersStr,
-				egressStr,
-			)
+			return w.Flush()
 		}
-		return w.Flush()
-	}
-
-	if (resource == "gateway" || resource == "gateways") && len(args) >= 2 {
-		name := args[1]
+		name := target.name
 		gw, err := client.GetGateway(ctx, &v1alpha1.GetGatewayRequest{Atespace: atespace, Name: name})
 		if err != nil {
 			return fmt.Errorf("getting gateway %q: %w", name, err)
 		}
 
 		return yaml.NewEncoder(os.Stdout).Encode(gw)
-	}
+	case v1alpha1.KindWorkspace:
+		if target.name == "" {
+			resp, err := client.ListWorkspaces(ctx, &v1alpha1.ListWorkspacesRequest{Atespace: atespace})
+			if err != nil {
+				return fmt.Errorf("listing workspaces: %w", err)
+			}
 
-	if resource == "workspaces" || resource == "workspace" && len(args) == 1 {
-		resp, err := client.ListWorkspaces(ctx, &v1alpha1.ListWorkspacesRequest{Atespace: atespace})
-		if err != nil {
-			return fmt.Errorf("listing workspaces: %w", err)
-		}
+			workspaces := resp.Workspaces
 
-		workspaces := resp.Workspaces
-
-		w := tabwriter.NewWriter(os.Stdout, 0, 8, 3, ' ', 0)
-		fmt.Fprintln(w, "NAME\tATESPACE\tGIT-REPOS\tMCP-SERVERS")
-		for _, ws := range workspaces {
-			gitCount := "0"
-			mcpCount := "0"
-			if ws.Spec != nil {
-				gitCount = fmt.Sprintf("%d", len(ws.Spec.Git))
-				if ws.Spec.Mcp != nil {
-					mcpCount = fmt.Sprintf("%d", len(ws.Spec.Mcp.Servers))
+			w := tabwriter.NewWriter(os.Stdout, 0, 8, 3, ' ', 0)
+			fmt.Fprintln(w, "NAME\tATESPACE\tGIT-REPOS\tMCP-SERVERS")
+			for _, ws := range workspaces {
+				gitCount := "0"
+				mcpCount := "0"
+				if ws.Spec != nil {
+					gitCount = fmt.Sprintf("%d", len(ws.Spec.Git))
+					if ws.Spec.Mcp != nil {
+						mcpCount = fmt.Sprintf("%d", len(ws.Spec.Mcp.Servers))
+					}
 				}
+				name := ""
+				wsAtespace := ""
+				if ws.Metadata != nil {
+					name = ws.Metadata.Name
+					wsAtespace = ws.Metadata.Atespace
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+					name,
+					wsAtespace,
+					gitCount,
+					mcpCount,
+				)
 			}
-			name := ""
-			wsAtespace := ""
-			if ws.Metadata != nil {
-				name = ws.Metadata.Name
-				wsAtespace = ws.Metadata.Atespace
-			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-				name,
-				wsAtespace,
-				gitCount,
-				mcpCount,
-			)
+			return w.Flush()
 		}
-		return w.Flush()
-	}
-
-	if (resource == "workspace" || resource == "workspaces") && len(args) >= 2 {
-		name := args[1]
+		name := target.name
 		ws, err := client.GetWorkspace(ctx, &v1alpha1.GetWorkspaceRequest{Atespace: atespace, Name: name})
 		if err != nil {
 			return fmt.Errorf("getting workspace %q: %w", name, err)
 		}
 
 		return yaml.NewEncoder(os.Stdout).Encode(ws)
-	}
-
-	if resource == "models" || resource == "model" && len(args) == 1 {
-		resp, err := client.ListModels(ctx, &v1alpha1.ListModelsRequest{Atespace: atespace})
-		if err != nil {
-			return fmt.Errorf("listing models: %w", err)
-		}
-
-		models := resp.Models
-
-		w := tabwriter.NewWriter(os.Stdout, 0, 8, 3, ' ', 0)
-		fmt.Fprintln(w, "NAME\tATESPACE\tPROVIDER\tMODEL")
-		for _, m := range models {
-			name := ""
-			mAtespace := ""
-			if m.Metadata != nil {
-				name = m.Metadata.Name
-				mAtespace = m.Metadata.Atespace
+	case v1alpha1.KindModel:
+		if target.name == "" {
+			resp, err := client.ListModels(ctx, &v1alpha1.ListModelsRequest{Atespace: atespace})
+			if err != nil {
+				return fmt.Errorf("listing models: %w", err)
 			}
-			provider := ""
-			modelName := ""
-			if m.Spec != nil {
-				provider = m.Spec.Provider
-				modelName = m.Spec.Model
-			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-				name,
-				mAtespace,
-				provider,
-				modelName,
-			)
-		}
-		return w.Flush()
-	}
 
-	if (resource == "model" || resource == "models") && len(args) >= 2 {
-		name := args[1]
+			models := resp.Models
+
+			w := tabwriter.NewWriter(os.Stdout, 0, 8, 3, ' ', 0)
+			fmt.Fprintln(w, "NAME\tATESPACE\tPROVIDER\tMODEL")
+			for _, m := range models {
+				name := ""
+				mAtespace := ""
+				if m.Metadata != nil {
+					name = m.Metadata.Name
+					mAtespace = m.Metadata.Atespace
+				}
+				provider := ""
+				modelName := ""
+				if m.Spec != nil {
+					provider = m.Spec.Provider
+					modelName = m.Spec.Model
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+					name,
+					mAtespace,
+					provider,
+					modelName,
+				)
+			}
+			return w.Flush()
+		}
+		name := target.name
 		m, err := client.GetModel(ctx, &v1alpha1.GetModelRequest{Atespace: atespace, Name: name})
 		if err != nil {
 			return fmt.Errorf("getting model %q: %w", name, err)
 		}
 
 		return yaml.NewEncoder(os.Stdout).Encode(m)
+	default:
+		return fmt.Errorf("unknown resource %q", args[0])
 	}
+}
 
-	return fmt.Errorf("unknown resource %q", resource)
+// describeTarget is the parsed form of "ax describe <resource> <name>".
+type describeTarget struct {
+	kind string // canonical kind: v1alpha1.KindTask, KindGateway, KindWorkspace, KindModel
+	name string
+}
+
+// parseDescribeArgs resolves "ax describe" arguments to a canonical resource
+// kind and a name. An unknown kind is an error: the old code fell through to
+// GetTask, so "ax describe frobnicate x" silently described a task named x.
+func parseDescribeArgs(args []string) (describeTarget, error) {
+	if len(args) < 2 {
+		return describeTarget{}, fmt.Errorf("usage: ax describe <task|gateway|workspace|model> <name>")
+	}
+	kind, err := normalizeKind(args[0])
+	if err != nil {
+		return describeTarget{}, err
+	}
+	return describeTarget{kind: kind, name: args[1]}, nil
 }
 
 func runDescribe(serverURL, atespace string, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: ax describe <task|gateway|workspace|model> <name>")
+	target, err := parseDescribeArgs(args)
+	if err != nil {
+		return err
 	}
-	kind := strings.ToLower(args[0])
-	name := args[1]
+	kind, name := target.kind, target.name
 
 	client, conn, err := getAXClient(serverURL)
 	if err != nil {
@@ -578,7 +623,8 @@ func runDescribe(serverURL, atespace string, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if kind == "model" || kind == "models" {
+	switch kind {
+	case v1alpha1.KindModel:
 		m, err := client.GetModel(ctx, &v1alpha1.GetModelRequest{Atespace: atespace, Name: name})
 		if err != nil {
 			return fmt.Errorf("getting model %q: %w", name, err)
@@ -617,9 +663,8 @@ func runDescribe(serverURL, atespace string, args []string) error {
 			}
 		}
 		return nil
-	}
 
-	if kind == "workspace" || kind == "workspaces" {
+	case v1alpha1.KindWorkspace:
 		ws, err := client.GetWorkspace(ctx, &v1alpha1.GetWorkspaceRequest{Atespace: atespace, Name: name})
 		if err != nil {
 			return fmt.Errorf("getting workspace %q: %w", name, err)
@@ -675,9 +720,8 @@ func runDescribe(serverURL, atespace string, args []string) error {
 			}
 		}
 		return nil
-	}
 
-	if kind == "gateway" || kind == "gateways" {
+	case v1alpha1.KindGateway:
 		gw, err := client.GetGateway(ctx, &v1alpha1.GetGatewayRequest{Atespace: atespace, Name: name})
 		if err != nil {
 			return fmt.Errorf("getting gateway %q: %w", name, err)
@@ -706,76 +750,93 @@ func runDescribe(serverURL, atespace string, args []string) error {
 			}
 		}
 		return nil
-	}
 
-	task, err := client.GetTask(ctx, &v1alpha1.GetTaskRequest{Atespace: atespace, Name: name})
-	if err != nil {
-		return fmt.Errorf("getting task %q: %w", name, err)
-	}
-
-	taskName := ""
-	taskAtespace := ""
-	if task.Metadata != nil {
-		taskName = task.Metadata.Name
-		taskAtespace = task.Metadata.Atespace
-	}
-	phase := ""
-	actor := ""
-	workerIP := ""
-	var conditions []*v1alpha1.Condition
-	if task.Status != nil {
-		phase = task.Status.Phase
-		actor = task.Status.Actor
-		workerIP = task.Status.WorkerIp
-		conditions = task.Status.Conditions
-	}
-
-	fmt.Printf("Name:         %s\n", taskName)
-	fmt.Printf("Atespace:     %s\n", taskAtespace)
-	fmt.Printf("Phase:        %s\n", phase)
-	fmt.Printf("Actor:        %s\n", actor)
-	fmt.Printf("Worker IP:    %s\n", workerIP)
-	if task.Spec != nil {
-		if task.Spec.Gateway != nil {
-			fmt.Printf("Gateway:      %s\n", task.Spec.Gateway.Name)
+	case v1alpha1.KindTask:
+		task, err := client.GetTask(ctx, &v1alpha1.GetTaskRequest{Atespace: atespace, Name: name})
+		if err != nil {
+			return fmt.Errorf("getting task %q: %w", name, err)
 		}
-		if refs := task.Spec.WorkspaceRefs(); len(refs) > 0 {
-			paths := task.Spec.WorkspacePaths()
-			fmt.Println("Workspaces:")
-			for i, ref := range refs {
-				fmt.Printf("  - %s  path=%s", ref.Name, paths[i])
-				if ref.Goal != "" {
-					fmt.Printf("  goal=%q", ref.Goal)
+
+		taskName := ""
+		taskAtespace := ""
+		if task.Metadata != nil {
+			taskName = task.Metadata.Name
+			taskAtespace = task.Metadata.Atespace
+		}
+		phase := ""
+		actor := ""
+		workerIP := ""
+		var conditions []*v1alpha1.Condition
+		if task.Status != nil {
+			phase = task.Status.Phase
+			actor = task.Status.Actor
+			workerIP = task.Status.WorkerIp
+			conditions = task.Status.Conditions
+		}
+
+		fmt.Printf("Name:         %s\n", taskName)
+		fmt.Printf("Atespace:     %s\n", taskAtespace)
+		fmt.Printf("Phase:        %s\n", phase)
+		fmt.Printf("Actor:        %s\n", actor)
+		fmt.Printf("Worker IP:    %s\n", workerIP)
+		if task.Spec != nil {
+			if task.Spec.Gateway != nil {
+				fmt.Printf("Gateway:      %s\n", task.Spec.Gateway.Name)
+			}
+			if refs := task.Spec.WorkspaceRefs(); len(refs) > 0 {
+				paths := task.Spec.WorkspacePaths()
+				fmt.Println("Workspaces:")
+				for i, ref := range refs {
+					fmt.Printf("  - %s  path=%s", ref.Name, paths[i])
+					if ref.Goal != "" {
+						fmt.Printf("  goal=%q", ref.Goal)
+					}
+					fmt.Println()
 				}
-				fmt.Println()
+			}
+			if task.Spec.Image != "" {
+				fmt.Printf("Image:        %s\n", task.Spec.Image)
+			}
+			if len(task.Spec.Command) > 0 {
+				fmt.Printf("Command:      %v\n", task.Spec.Command)
 			}
 		}
-		if task.Spec.Image != "" {
-			fmt.Printf("Image:        %s\n", task.Spec.Image)
-		}
-		if len(task.Spec.Command) > 0 {
-			fmt.Printf("Command:      %v\n", task.Spec.Command)
-		}
-	}
 
-	if len(conditions) > 0 {
-		fmt.Println("\nConditions:")
-		w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
-		fmt.Fprintln(w, "  TYPE\tSTATUS\tREASON\tMESSAGE")
-		for _, c := range conditions {
-			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", c.Type, c.Status, c.Reason, c.Message)
+		if len(conditions) > 0 {
+			fmt.Println("\nConditions:")
+			w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
+			fmt.Fprintln(w, "  TYPE\tSTATUS\tREASON\tMESSAGE")
+			for _, c := range conditions {
+				fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", c.Type, c.Status, c.Reason, c.Message)
+			}
+			_ = w.Flush()
 		}
-		_ = w.Flush()
-	}
 
-	return nil
+		return nil
+	default:
+		return fmt.Errorf("unsupported kind %q", kind)
+	}
+}
+
+// parseWatchArgs resolves "ax watch task <name>" to the task name. The old
+// code ignored args[0] entirely, so "ax watch gateway mygw" silently watched
+// a task named "mygw". Kind matching goes through normalizeKind, the same
+// normalizer every other command uses.
+func parseWatchArgs(args []string) (string, error) {
+	if len(args) < 2 {
+		return "", fmt.Errorf("usage: ax watch task <name>")
+	}
+	if kind, err := normalizeKind(args[0]); err != nil || kind != v1alpha1.KindTask {
+		return "", fmt.Errorf("unknown resource %q (usage: ax watch task <name>)", args[0])
+	}
+	return args[1], nil
 }
 
 func runWatch(serverURL, atespace string, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: ax watch task <name>")
+	name, err := parseWatchArgs(args)
+	if err != nil {
+		return err
 	}
-	name := args[1]
 
 	client, conn, err := getAXClient(serverURL)
 	if err != nil {
@@ -927,7 +988,7 @@ func waitForDeletion(ctx context.Context, client v1alpha1.AXClient, kind, atespa
 // normalizeKind maps user-typed kinds ("task", "tasks", "Task") to the canonical
 // manifest kind, rejecting anything unknown.
 func normalizeKind(kind string) (string, error) {
-	switch strings.ToLower(strings.TrimSuffix(kind, "s")) {
+	switch strings.TrimSuffix(strings.ToLower(kind), "s") {
 	case "task":
 		return v1alpha1.KindTask, nil
 	case "gateway":
@@ -967,18 +1028,27 @@ func manifestFromArgs(args []string) (data []byte, ok bool, err error) {
 	return nil, false, nil
 }
 
-func runSuspend(serverURL, atespace string, args []string) error {
-	name := ""
+// parseTaskNameArgs resolves the task name for "ax suspend|resume [task] <name>".
+// A bare name is used as-is; with two or more args the first must normalize
+// to the task kind (via normalizeKind, like every other command), otherwise
+// it is an error instead of silently targeting a task with the kind's name.
+func parseTaskNameArgs(args []string, usage string) (string, error) {
 	if len(args) == 1 {
-		name = args[0]
-	} else if len(args) >= 2 {
-		if args[0] == "task" || args[0] == "tasks" {
-			name = args[1]
-		} else {
-			name = args[0]
+		return args[0], nil
+	}
+	if len(args) >= 2 {
+		if kind, err := normalizeKind(args[0]); err != nil || kind != v1alpha1.KindTask {
+			return "", fmt.Errorf("unknown resource %q (usage: %s)", args[0], usage)
 		}
-	} else {
-		return fmt.Errorf("usage: ax suspend task <name>")
+		return args[1], nil
+	}
+	return "", fmt.Errorf("usage: %s", usage)
+}
+
+func runSuspend(serverURL, atespace string, args []string) error {
+	name, err := parseTaskNameArgs(args, "ax suspend task <name>")
+	if err != nil {
+		return err
 	}
 
 	client, conn, err := getAXClient(serverURL)
@@ -999,17 +1069,9 @@ func runSuspend(serverURL, atespace string, args []string) error {
 }
 
 func runResume(serverURL, atespace string, args []string) error {
-	name := ""
-	if len(args) == 1 {
-		name = args[0]
-	} else if len(args) >= 2 {
-		if args[0] == "task" || args[0] == "tasks" {
-			name = args[1]
-		} else {
-			name = args[0]
-		}
-	} else {
-		return fmt.Errorf("usage: ax resume task <name>")
+	name, err := parseTaskNameArgs(args, "ax resume task <name>")
+	if err != nil {
+		return err
 	}
 
 	client, conn, err := getAXClient(serverURL)

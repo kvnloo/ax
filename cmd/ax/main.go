@@ -427,7 +427,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 			return fmt.Errorf("listing tasks: %w", err)
 		}
 
-		tasks := resp.Tasks
+		tasks := sortByName(resp.Tasks, func(t *v1alpha1.Task) string { return objectName(t.Metadata) })
 		if len(tasks) == 0 {
 			fmt.Println(emptyListMessage("tasks", atespace))
 			return nil
@@ -490,7 +490,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 			return fmt.Errorf("listing gateways: %w", err)
 		}
 
-		gateways := resp.Gateways
+		gateways := sortByName(resp.Gateways, func(g *v1alpha1.Gateway) string { return objectName(g.Metadata) })
 		if len(gateways) == 0 {
 			fmt.Println(emptyListMessage("gateways", atespace))
 			return nil
@@ -553,7 +553,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 			return fmt.Errorf("listing workspaces: %w", err)
 		}
 
-		workspaces := resp.Workspaces
+		workspaces := sortByName(resp.Workspaces, func(w *v1alpha1.Workspace) string { return objectName(w.Metadata) })
 		if len(workspaces) == 0 {
 			fmt.Println(emptyListMessage("workspaces", atespace))
 			return nil
@@ -602,7 +602,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 			return fmt.Errorf("listing models: %w", err)
 		}
 
-		models := resp.Models
+		models := sortByName(resp.Models, func(m *v1alpha1.Model) string { return objectName(m.Metadata) })
 		if len(models) == 0 {
 			fmt.Println(emptyListMessage("models", atespace))
 			return nil
@@ -1477,4 +1477,21 @@ func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 	}
 
 	return nil
+}
+
+// sortByName orders list rows by their object name so `ax get` output is
+// deterministic. The server returns items in store order, which can reshuffle
+// across restarts; kubectl sorts list output by name too.
+func sortByName[T any](items []T, name func(T) string) []T {
+	out := make([]T, len(items))
+	copy(out, items)
+	sort.SliceStable(out, func(i, j int) bool { return name(out[i]) < name(out[j]) })
+	return out
+}
+
+func objectName(meta *v1alpha1.ObjectMeta) string {
+	if meta != nil {
+		return meta.Name
+	}
+	return ""
 }

@@ -228,6 +228,19 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, gat
 		return task, fmt.Errorf("resuming actor: %w", err)
 	}
 
+	if workerIP == "" {
+		// Substrate resumed the actor but has not assigned it to a worker yet
+		// (still scheduling). Don't report Running: without an address there is
+		// no workspace to poll, and claiming Running would wedge the task —
+		// nothing re-triggers a reconcile until the next task update, so the
+		// next event picks the assignment up from here.
+		task.Status.WorkerIp = ""
+		task.Status.Phase = "Pending"
+		r.setCondition(task, condReady, "False", "WaitingForWorker", "Actor resumed but not yet assigned to a worker", now)
+		slog.Info("actor resumed without worker assignment yet", "actor", actorName)
+		return task, nil
+	}
+
 	task.Status.WorkerIp = workerIP
 	task.Status.Phase = "Running"
 

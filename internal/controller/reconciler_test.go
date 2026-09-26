@@ -33,15 +33,18 @@ import (
 
 type mockControlServer struct {
 	ateapipb.UnimplementedControlServer
-	workerIP         string
-	createdAtespaces []string
-	createdActors    []string
-	resumedActors    []string
-	suspendedActors  []string
-	createdPolicies  []string
-	deletedActors    []string
-	actorTemplates   map[string]bool
-	deletedTemplates []string
+	workerIP string
+	// omitWorkerAssignment, when true, makes ResumeActor return an actor with
+	// no WorkerAssignment, i.e. ResumeActor reports success but no worker IP.
+	omitWorkerAssignment bool
+	createdAtespaces     []string
+	createdActors        []string
+	resumedActors        []string
+	suspendedActors      []string
+	createdPolicies      []string
+	deletedActors        []string
+	actorTemplates       map[string]bool
+	deletedTemplates     []string
 	// deleteTemplateErr, when set, is returned by DeleteActorTemplate instead of
 	// deleting; deleteTemplateCalls counts the attempts.
 	deleteTemplateErr   error
@@ -89,16 +92,19 @@ func (m *mockControlServer) ResumeActor(ctx context.Context, req *ateapipb.Resum
 	if m.workerIP != "" {
 		wIP = m.workerIP
 	}
+	actorStatus := &ateapipb.ActorStatus{
+		State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+	}
+	if !m.omitWorkerAssignment {
+		actorStatus.WorkerAssignment = &ateapipb.WorkerAssignment{
+			WorkerPod:   "worker-pod-1",
+			WorkerPodIp: wIP,
+		}
+	}
 	return &ateapipb.ResumeActorResponse{
 		Actor: &ateapipb.Actor{
 			Metadata: &ateapipb.ResourceMetadata{Name: name},
-			Status: &ateapipb.ActorStatus{
-				State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
-				WorkerAssignment: &ateapipb.WorkerAssignment{
-					WorkerPod:   "worker-pod-1",
-					WorkerPodIp: wIP,
-				},
-			},
+			Status:   actorStatus,
 		},
 		Resumed: true,
 	}, nil
@@ -641,5 +647,79 @@ func TestReconcileDelete_TemplateDeleteAbortedRetries(t *testing.T) {
 	}
 	if mockSrv.deleteTemplateCalls != 5 {
 		t.Errorf("Aborted attempted %d times, want 5 (retry with backoff)", mockSrv.deleteTemplateCalls)
+	}
+}
+
+// TestReconcile_EmptyWorkerIPStaysPending is the regression test for the
+// wedged-task defect: when Substrate resumes the actor but has no worker
+// assignment yet, ResumeActor returns ("", nil). The old code reported
+// Phase=Running with an empty WorkerIp, skipped the workspace-ready poll
+// entirely, and left the task stuck — nothing re-triggers a reconcile until
+// the next task update. Red on base (old code reports "Running").
+func TestReconcile_EmptyWorkerIPStaysPending(t *testing.T) {
+	ctx := context.Background()
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer lis.Close()
+
+	mockSrv := &mockControlServer{omitWorkerAssignment: true}
+	grpcServer := grpc.NewServer()
+	ateapipb.RegisterControlServer(grpcServer, mockSrv)
+	go grpcServer.Serve(lis)
+	defer grpcServer.Stop()
+
+	client, err := substrate.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("failed to create substrate client: %v", err)
+	}
+	defer client.Close()
+
+	reconciler := controller.NewTaskReconciler(client, "test-template", "ax-system")
+	reconciler.SecretResolver = noSecrets
+	reconciler.WorkspaceReadyTimeout = 200 * time.Millisecond
+
+	task := &v1alpha1.Task{
+		ApiVersion: v1alpha1.APIVersion,
+		Kind:       v1alpha1.KindTask,
+		Metadata: &v1alpha1.ObjectMeta{
+			Name:     "unassigned-task",
+			Atespace: "default",
+		},
+		Spec: &v1alpha1.TaskSpec{
+			Image: "ghrc.io/my-org/my-image",
+		},
+	}
+
+	reconciled, err := reconciler.Reconcile(ctx, task, nil)
+	if err != nil {
+		t.Fatalf("Reconcile failed: %v", err)
+	}
+
+	if reconciled.Status.Phase == "Running" {
+		t.Errorf("task with no worker assignment must not report Running, got phase %q with empty worker IP", reconciled.Status.Phase)
+	}
+	if reconciled.Status.Phase != "Pending" {
+		t.Errorf("expected phase 'Pending', got %q", reconciled.Status.Phase)
+	}
+	if reconciled.Status.WorkerIp != "" {
+		t.Errorf("expected empty worker IP, got %q", reconciled.Status.WorkerIp)
+	}
+	found := false
+	for _, c := range reconciled.Status.Conditions {
+		if c.GetType() == "Ready" {
+			found = true
+			if c.GetStatus() != "False" {
+				t.Errorf("expected Ready=False, got %q", c.GetStatus())
+			}
+			if c.GetReason() != "WaitingForWorker" {
+				t.Errorf("expected Ready reason 'WaitingForWorker', got %q", c.GetReason())
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected a Ready condition on the reconciled task")
 	}
 }

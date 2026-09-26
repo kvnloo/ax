@@ -100,12 +100,37 @@ func SaveTunnel(info *TunnelInfo) error {
 	if err != nil {
 		return err
 	}
-	statePath := filepath.Join(dir, SanitizeContext(info.Context)+".json")
 	data, err := json.MarshalIndent(info, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(statePath, data, 0644)
+	// Write atomically: a crash mid-write must never leave a torn state
+	// file behind. A torn file makes GetTunnel fail, so ctx show reports
+	// "no tunnel running" while the port-forward is still alive and the
+	// next command auto-connects a second tunnel, orphaning the first.
+	// Rename within the same directory is atomic on POSIX: after a crash
+	// the path holds either the old or the new complete file, never a
+	// partial one.
+	statePath := filepath.Join(dir, SanitizeContext(info.Context)+".json")
+	tmp, err := os.CreateTemp(dir, ".tmp-*.json")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, 0644); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, statePath)
 }
 
 func StopTunnel(info *TunnelInfo) error {

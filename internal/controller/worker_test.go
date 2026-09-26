@@ -16,6 +16,7 @@ package controller_test
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -184,5 +185,103 @@ func TestWorkerDeletion(t *testing.T) {
 	}
 	if len(mockSrv.deletedTemplates) != 1 || mockSrv.deletedTemplates[0] != "doomed-tmpl-0a1b2c3d" {
 		t.Errorf("expected template deleted, got %v", mockSrv.deletedTemplates)
+	}
+}
+
+// TestWorkerTerminatingReconcileCompletesDeletion is the regression test for
+// the resurrection defect: a "reconcile" event arriving for a Terminating
+// task (e.g. an update racing the delete — every SaveTask publishes one) ran
+// the full Reconcile path, calling ResumeActor on an actor that was being
+// torn down. The delete path must win regardless of the event action.
+// Red on base (old code resumes the actor a second time and flips the task
+// back to Running).
+func TestWorkerTerminatingReconcileCompletesDeletion(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer lis.Close()
+
+	// Fail actor deletion so the record stays Terminating after the delete
+	// event, letting the racing reconcile event observe that phase.
+	mockSrv := &mockControlServer{deleteActorErr: errors.New("injected delete failure")}
+	grpcServer := grpc.NewServer()
+	ateapipb.RegisterControlServer(grpcServer, mockSrv)
+	go grpcServer.Serve(lis)
+	defer grpcServer.Stop()
+
+	subClient, err := substrate.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("failed to create substrate client: %v", err)
+	}
+	defer subClient.Close()
+
+	reconciler := controller.NewTaskReconciler(subClient, "default-template", "ax-system")
+	reconciler.SecretResolver = noSecrets
+	reconciler.WorkspaceReadyTimeout = 200 * time.Millisecond
+
+	memStore := memory.NewStore()
+	task := &v1alpha1.Task{
+		Metadata: &v1alpha1.ObjectMeta{Name: "resurrect-me", Atespace: "default"},
+		Spec:     &v1alpha1.TaskSpec{Image: "ghcr.io/test/img"},
+	}
+	if err := memStore.SaveTask(ctx, task); err != nil {
+		t.Fatalf("failed to save task: %v", err)
+	}
+
+	worker := controller.NewWorker(memStore, reconciler, "test-group", "worker-1")
+	go func() { _ = worker.Run(ctx) }()
+
+	// Wait for the initial reconcile to bring the task to Running.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if tItem, err := memStore.GetTask(ctx, "default", "resurrect-me"); err == nil && tItem.Status.Phase == "Running" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got, _ := memStore.GetTask(ctx, "default", "resurrect-me"); got.Status.Phase != "Running" {
+		t.Fatalf("task did not reach Running, got %q", got.Status.Phase)
+	}
+	if n := mockSrv.resumedCount(); n != 1 {
+		t.Fatalf("expected 1 resume from initial reconcile, got %d", n)
+	}
+
+	// Mark deleting: the delete event's cleanup fails (injected), so the
+	// record stays Terminating.
+	if err := memStore.MarkTaskDeleting(ctx, "default", "resurrect-me"); err != nil {
+		t.Fatalf("MarkTaskDeleting failed: %v", err)
+	}
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && mockSrv.deletedActorCount() < 1 {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if n := mockSrv.deletedActorCount(); n < 1 {
+		t.Fatalf("delete event was not processed in time")
+	}
+
+	// A racing update publishes a "reconcile" event for the Terminating task.
+	racing, err := memStore.GetTask(ctx, "default", "resurrect-me")
+	if err != nil {
+		t.Fatalf("GetTask failed: %v", err)
+	}
+	if racing.Status.Phase != v1alpha1.PhaseTerminating {
+		t.Fatalf("expected Terminating after failed cleanup, got %q", racing.Status.Phase)
+	}
+	if err := memStore.SaveTask(ctx, racing); err != nil {
+		t.Fatalf("SaveTask failed: %v", err)
+	}
+
+	// Let the worker process the racing reconcile event.
+	time.Sleep(time.Second)
+
+	if n := mockSrv.resumedCount(); n != 1 {
+		t.Errorf("reconcile event for a Terminating task resumed the actor: %d resumes, want 1", n)
+	}
+	if got, _ := memStore.GetTask(ctx, "default", "resurrect-me"); got.Status.Phase != v1alpha1.PhaseTerminating {
+		t.Errorf("task left Terminating by racing reconcile, got %q", got.Status.Phase)
 	}
 }

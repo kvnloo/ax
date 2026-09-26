@@ -106,16 +106,7 @@ func (w *Worker) Run(ctx context.Context) error {
 
 func (w *Worker) processEvent(ctx context.Context, ev store.TaskEvent) error {
 	if ev.Action == "delete" {
-		slog.Info("handling task deletion event", "atespace", ev.Atespace, "name", ev.Name)
-		if err := w.reconciler.ReconcileDelete(ctx, ev.Atespace, ev.Name); err != nil {
-			// Leave the record in Terminating so the failure is visible; re-running
-			// `ax delete` republishes the event and retries the cleanup.
-			return fmt.Errorf("cleaning up task %s/%s: %w", ev.Atespace, ev.Name, err)
-		}
-		if err := w.store.DeleteTask(ctx, ev.Atespace, ev.Name); err != nil {
-			return fmt.Errorf("removing task record %s/%s: %w", ev.Atespace, ev.Name, err)
-		}
-		return nil
+		return w.deleteTask(ctx, ev.Atespace, ev.Name)
 	}
 
 	task, err := w.store.GetTask(ctx, ev.Atespace, ev.Name)
@@ -125,6 +116,17 @@ func (w *Worker) processEvent(ctx context.Context, ev store.TaskEvent) error {
 			return nil
 		}
 		return fmt.Errorf("fetching task %s/%s: %w", ev.Atespace, ev.Name, err)
+	}
+
+	if task.Status != nil && task.Status.Phase == v1alpha1.PhaseTerminating {
+		// A Terminating task is past the point of no return: a "reconcile"
+		// event can still arrive for it when an update races the delete (every
+		// SaveTask publishes one). Running the normal path here would call
+		// ResumeActor and resurrect an actor that is being torn down, so the
+		// delete path wins regardless of the event action.
+		slog.Info("task is terminating; completing deletion instead of reconciling",
+			"atespace", ev.Atespace, "name", ev.Name)
+		return w.deleteTask(ctx, ev.Atespace, ev.Name)
 	}
 
 	var gw *v1alpha1.Gateway
@@ -163,5 +165,19 @@ func (w *Worker) processEvent(ctx context.Context, ev store.TaskEvent) error {
 		return fmt.Errorf("updating task status %s/%s: %w", task.Metadata.Atespace, task.Metadata.Name, err)
 	}
 
+	return nil
+}
+
+// deleteTask tears down the Substrate actor and removes the task record. The
+// record is left in Terminating when cleanup fails so the failure stays
+// visible; re-running `ax delete` republishes the event and retries.
+func (w *Worker) deleteTask(ctx context.Context, atespace, name string) error {
+	slog.Info("handling task deletion event", "atespace", atespace, "name", name)
+	if err := w.reconciler.ReconcileDelete(ctx, atespace, name); err != nil {
+		return fmt.Errorf("cleaning up task %s/%s: %w", atespace, name, err)
+	}
+	if err := w.store.DeleteTask(ctx, atespace, name); err != nil {
+		return fmt.Errorf("removing task record %s/%s: %w", atespace, name, err)
+	}
 	return nil
 }

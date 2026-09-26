@@ -18,6 +18,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -49,6 +50,11 @@ type mockControlServer struct {
 	// deleting; deleteTemplateCalls counts the attempts.
 	deleteTemplateErr   error
 	deleteTemplateCalls int
+	// deleteActorErr, when set, is returned by DeleteActor instead of deleting.
+	deleteActorErr error
+	// mu guards resumedActors/deletedActors, which the gRPC handlers append
+	// to while tests read them.
+	mu sync.Mutex
 	// createdTemplates records every ActorTemplate name requested via
 	// CreateActorTemplate, in order.
 	createdTemplates []string
@@ -87,7 +93,9 @@ func (m *mockControlServer) ResumeActor(ctx context.Context, req *ateapipb.Resum
 	if req.Actor != nil {
 		name = req.Actor.Name
 	}
+	m.mu.Lock()
 	m.resumedActors = append(m.resumedActors, name)
+	m.mu.Unlock()
 	wIP := "10.244.1.42"
 	if m.workerIP != "" {
 		wIP = m.workerIP
@@ -130,8 +138,27 @@ func (m *mockControlServer) CreateActorEgressPolicy(ctx context.Context, req *at
 
 func (m *mockControlServer) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (*ateapipb.Actor, error) {
 	name := req.GetActor().GetName()
+	m.mu.Lock()
 	m.deletedActors = append(m.deletedActors, name)
+	m.mu.Unlock()
+	if m.deleteActorErr != nil {
+		return nil, m.deleteActorErr
+	}
 	return &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: name}}, nil
+}
+
+// resumedCount reports how many ResumeActor calls the mock has served.
+func (m *mockControlServer) resumedCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.resumedActors)
+}
+
+// deletedActorCount reports how many DeleteActor calls the mock has served.
+func (m *mockControlServer) deletedActorCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.deletedActors)
 }
 
 func (m *mockControlServer) ListActorTemplates(ctx context.Context, req *ateapipb.ListActorTemplatesRequest) (*ateapipb.ListActorTemplatesResponse, error) {

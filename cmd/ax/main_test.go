@@ -35,6 +35,7 @@ type fakeAXClient struct {
 	v1alpha1.AXClient
 	getTaskErr   error
 	updatedTasks []*v1alpha1.Task
+	listedTasks  []*v1alpha1.Task
 }
 
 func (f *fakeAXClient) GetTask(ctx context.Context, in *v1alpha1.GetTaskRequest, opts ...grpc.CallOption) (*v1alpha1.Task, error) {
@@ -47,6 +48,10 @@ func (f *fakeAXClient) GetTask(ctx context.Context, in *v1alpha1.GetTaskRequest,
 func (f *fakeAXClient) UpdateTask(ctx context.Context, in *v1alpha1.UpdateTaskRequest, opts ...grpc.CallOption) (*v1alpha1.Task, error) {
 	f.updatedTasks = append(f.updatedTasks, in.Task)
 	return in.Task, nil
+}
+
+func (f *fakeAXClient) ListTasks(ctx context.Context, in *v1alpha1.ListTasksRequest, opts ...grpc.CallOption) (*v1alpha1.ListTasksResponse, error) {
+	return &v1alpha1.ListTasksResponse{Tasks: f.listedTasks}, nil
 }
 
 const multiDocManifest = `kind: Task

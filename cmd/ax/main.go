@@ -400,12 +400,6 @@ func applyOutcome(lookupErr error, existingSpec, newSpec proto.Message) (string,
 }
 
 func runGet(serverURL, atespace string, args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("specify resource to get (e.g. 'ax get tasks' or 'ax get task <name>')")
-	}
-
-	resource := strings.ToLower(args[0])
-
 	client, conn, err := getAXClient(serverURL)
 	if err != nil {
 		return err
@@ -415,6 +409,18 @@ func runGet(serverURL, atespace string, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
+	return runGetWithClient(ctx, client, atespace, args)
+}
+
+// runGetWithClient is the dial-free core of runGet, so tests can drive it
+// with a fake client.
+func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace string, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("specify resource to get (e.g. 'ax get tasks' or 'ax get task <name>')")
+	}
+
+	resource := strings.ToLower(args[0])
+
 	if resource == "tasks" || resource == "task" && len(args) == 1 {
 		resp, err := client.ListTasks(ctx, &v1alpha1.ListTasksRequest{Atespace: atespace})
 		if err != nil {
@@ -422,6 +428,10 @@ func runGet(serverURL, atespace string, args []string) error {
 		}
 
 		tasks := resp.Tasks
+		if len(tasks) == 0 {
+			fmt.Println(emptyListMessage("tasks", atespace))
+			return nil
+		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 8, 3, ' ', 0)
 		fmt.Fprintln(w, "NAME\tATESPACE\tPHASE\tACTOR\tWORKER-IP\tAGE")
@@ -481,6 +491,10 @@ func runGet(serverURL, atespace string, args []string) error {
 		}
 
 		gateways := resp.Gateways
+		if len(gateways) == 0 {
+			fmt.Println(emptyListMessage("gateways", atespace))
+			return nil
+		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 8, 3, ' ', 0)
 		fmt.Fprintln(w, "NAME\tATESPACE\tLISTENERS\tEGRESS-HOSTS")
@@ -540,6 +554,10 @@ func runGet(serverURL, atespace string, args []string) error {
 		}
 
 		workspaces := resp.Workspaces
+		if len(workspaces) == 0 {
+			fmt.Println(emptyListMessage("workspaces", atespace))
+			return nil
+		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 8, 3, ' ', 0)
 		fmt.Fprintln(w, "NAME\tATESPACE\tGIT-REPOS\tMCP-SERVERS")
@@ -585,6 +603,10 @@ func runGet(serverURL, atespace string, args []string) error {
 		}
 
 		models := resp.Models
+		if len(models) == 0 {
+			fmt.Println(emptyListMessage("models", atespace))
+			return nil
+		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 8, 3, ' ', 0)
 		fmt.Fprintln(w, "NAME\tATESPACE\tPROVIDER\tMODEL")
@@ -622,6 +644,14 @@ func runGet(serverURL, atespace string, args []string) error {
 	}
 
 	return fmt.Errorf("unknown resource %q", resource)
+}
+
+// emptyListMessage is the "nothing to show" line for the get list views.
+// kubectl prints "No resources found"; ax's own tunnel list prints its own
+// empty line — a bare table header on an empty atespace is ambiguous about
+// whether the list even ran.
+func emptyListMessage(resource, atespace string) string {
+	return fmt.Sprintf("No %s found in atespace %q.", resource, atespace)
 }
 
 func runDescribe(serverURL, atespace string, args []string) error {

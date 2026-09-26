@@ -505,6 +505,14 @@ func applyOutcome(lookupErr error, existingSpec, newSpec proto.Message) (string,
 }
 
 func runGet(serverURL, atespace string, args []string) error {
+	// Validate the args before dialing: describe/watch/delete all reject
+	// bad usage locally, but get used to open a connection first, so
+	// `ax get bogus-kind` against a dead server reported a dial/RPC error
+	// that hid the real usage problem.
+	if _, err := validateGetArgs(args); err != nil {
+		return err
+	}
+
 	client, conn, err := getAXClient(serverURL)
 	if err != nil {
 		return err
@@ -517,11 +525,13 @@ func runGet(serverURL, atespace string, args []string) error {
 	return runGetWithClient(ctx, client, atespace, args)
 }
 
-// runGetWithClient is the dial-free core of runGet, so tests can drive it
-// with a fake client.
-func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace string, args []string) error {
+// validateGetArgs checks the get argument shape (resource word plus an
+// optional name) without touching the network. runGet calls it before
+// dialing; runGetWithClient calls it again so the dial-free core keeps its
+// own validation when driven with a fake client.
+func validateGetArgs(args []string) (string, error) {
 	if len(args) == 0 {
-		return fmt.Errorf("specify resource to get (e.g. 'ax get tasks' or 'ax get task <name>')")
+		return "", fmt.Errorf("specify resource to get (e.g. 'ax get tasks' or 'ax get task <name>')")
 	}
 
 	// The resource position is normalized like describe/watch/delete/apply:
@@ -529,6 +539,29 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 	// raw lowercased word left `ax get " task"` failing with "unknown
 	// resource" while every sibling command accepted it.
 	resource, err := normalizeKind(args[0])
+	if err != nil {
+		return "", err
+	}
+
+	if len(args) > 2 {
+		switch resource {
+		case v1alpha1.KindTask:
+			return "", fmt.Errorf("usage: ax get <task|tasks> <name> (unexpected extra argument %q)", args[2])
+		case v1alpha1.KindGateway:
+			return "", fmt.Errorf("usage: ax get <gateway|gateways> <name> (unexpected extra argument %q)", args[2])
+		case v1alpha1.KindWorkspace:
+			return "", fmt.Errorf("usage: ax get <workspace|workspaces> <name> (unexpected extra argument %q)", args[2])
+		case v1alpha1.KindModel:
+			return "", fmt.Errorf("usage: ax get <model|models> <name> (unexpected extra argument %q)", args[2])
+		}
+	}
+	return resource, nil
+}
+
+// runGetWithClient is the dial-free core of runGet, so tests can drive it
+// with a fake client.
+func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace string, args []string) error {
+	resource, err := validateGetArgs(args)
 	if err != nil {
 		return err
 	}
@@ -586,10 +619,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 		return w.Flush()
 	}
 
-	if resource == v1alpha1.KindTask && len(args) >= 2 {
-		if len(args) > 2 {
-			return fmt.Errorf("usage: ax get <task|tasks> <name> (unexpected extra argument %q)", args[2])
-		}
+	if resource == v1alpha1.KindTask && len(args) == 2 {
 		name := args[1]
 		task, err := client.GetTask(ctx, &v1alpha1.GetTaskRequest{Atespace: atespace, Name: name})
 		if err != nil {
@@ -656,10 +686,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 		return w.Flush()
 	}
 
-	if resource == v1alpha1.KindGateway && len(args) >= 2 {
-		if len(args) > 2 {
-			return fmt.Errorf("usage: ax get <gateway|gateways> <name> (unexpected extra argument %q)", args[2])
-		}
+	if resource == v1alpha1.KindGateway && len(args) == 2 {
 		name := args[1]
 		gw, err := client.GetGateway(ctx, &v1alpha1.GetGatewayRequest{Atespace: atespace, Name: name})
 		if err != nil {
@@ -708,10 +735,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 		return w.Flush()
 	}
 
-	if resource == v1alpha1.KindWorkspace && len(args) >= 2 {
-		if len(args) > 2 {
-			return fmt.Errorf("usage: ax get <workspace|workspaces> <name> (unexpected extra argument %q)", args[2])
-		}
+	if resource == v1alpha1.KindWorkspace && len(args) == 2 {
 		name := args[1]
 		ws, err := client.GetWorkspace(ctx, &v1alpha1.GetWorkspaceRequest{Atespace: atespace, Name: name})
 		if err != nil {
@@ -758,10 +782,7 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 		return w.Flush()
 	}
 
-	if resource == v1alpha1.KindModel && len(args) >= 2 {
-		if len(args) > 2 {
-			return fmt.Errorf("usage: ax get <model|models> <name> (unexpected extra argument %q)", args[2])
-		}
+	if resource == v1alpha1.KindModel && len(args) == 2 {
 		name := args[1]
 		m, err := client.GetModel(ctx, &v1alpha1.GetModelRequest{Atespace: atespace, Name: name})
 		if err != nil {

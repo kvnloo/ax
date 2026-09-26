@@ -484,6 +484,15 @@ func spawnTunnel(ctxName, dir string, opts Options) (string, error) {
 	healthy := false
 	healthDeadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(healthDeadline) {
+		// The child may have died after printing the forwarding line (e.g.
+		// the target service vanished). Its port is then free, and a
+		// recycled port answering /healthz 200 would be adopted as ours —
+		// the same false-Active class the reuse path guards against. Probe
+		// liveness here too, and fail fast with kubectl's own output.
+		if childExited(cmd.Process.Pid) {
+			logData, _ := os.ReadFile(logPath)
+			return "", fmt.Errorf("kubectl port-forward exited for context %q: %s", ctxName, strings.TrimSpace(string(logData)))
+		}
 		if IsTunnelHealthy(localPort) {
 			healthy = true
 			break

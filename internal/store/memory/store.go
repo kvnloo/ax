@@ -147,6 +147,17 @@ func (s *MemoryStore) ListTasks(ctx context.Context, atespace string, limit, off
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	// Match the Redis backend's paging contract: a non-positive limit is one
+	// default page (50 rows), so direct store callers see identical results
+	// on both backends. Negative offsets are clamped to the head of the
+	// list instead of panicking the slice below.
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
 	type taskWithSeq struct {
 		task *v1alpha1.Task
 		seq  uint64

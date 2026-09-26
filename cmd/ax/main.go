@@ -592,12 +592,8 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 				actor = t.Status.Actor
 				phase = displayPhase(t.Status.Phase)
 			}
-			if strings.TrimSpace(workerIP) == "" {
-				workerIP = "<none>"
-			}
-			if strings.TrimSpace(actor) == "" {
-				actor = "<none>"
-			}
+			workerIP = displayWorkerIP(workerIP)
+			actor = displayActor(actor)
 			age := "<unknown>"
 			name := ""
 			tAtespace := ""
@@ -995,8 +991,8 @@ func runDescribe(serverURL, atespace string, args []string) error {
 	fmt.Printf("Name:         %s\n", taskName)
 	fmt.Printf("Atespace:     %s\n", taskAtespace)
 	fmt.Printf("Phase:        %s\n", phase)
-	fmt.Printf("Actor:        %s\n", actor)
-	fmt.Printf("Worker IP:    %s\n", workerIP)
+	fmt.Printf("Actor:        %s\n", displayActor(actor))
+	fmt.Printf("Worker IP:    %s\n", displayWorkerIP(workerIP))
 	if task.Spec != nil {
 		if task.Spec.Gateway != nil {
 			fmt.Printf("Gateway:      %s\n", task.Spec.Gateway.Name)
@@ -1127,9 +1123,9 @@ func watchStreamLoop(stream watchStream, w io.Writer, atespace, name string) err
 			}
 			fmt.Fprintf(w, "[%s] Phase: %-10s Actor: %-18s WorkerIP: %s\n",
 				time.Now().Format("15:04:05"),
-				phase,
-				actor,
-				workerIP,
+				displayPhase(phase),
+				displayActor(actor),
+				displayWorkerIP(workerIP),
 			)
 			if isTerminalPhase(phase) {
 				fmt.Fprintf(w, "Task reached terminal phase %q.\n", phase)
@@ -1802,6 +1798,27 @@ func displayPhase(phase string) string {
 		return p
 	}
 	return "Pending"
+}
+
+// displayActor renders a task actor for CLI display: whitespace-only counts
+// as unset and reads "<none>", matching the `ax get tasks` ACTOR column.
+// Used by the get list, `ax describe task`, and the `ax watch` event lines
+// so every render site follows one rule.
+func displayActor(actor string) string {
+	if a := strings.TrimSpace(actor); a != "" {
+		return a
+	}
+	return "<none>"
+}
+
+// displayWorkerIP renders a task worker IP for CLI display: whitespace-only
+// counts as unset and reads "<none>", matching the `ax get tasks` WORKER-IP
+// column. Same render sites as displayActor.
+func displayWorkerIP(workerIP string) string {
+	if w := strings.TrimSpace(workerIP); w != "" {
+		return w
+	}
+	return "<none>"
 }
 
 func listenerProtocol(l *v1alpha1.Listener) string {

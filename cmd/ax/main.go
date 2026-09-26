@@ -612,6 +612,9 @@ func runDescribe(serverURL, atespace string, args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: ax describe <task|gateway|workspace|model> <name>")
 	}
+	if len(args) > 2 {
+		return fmt.Errorf("usage: ax describe <task|gateway|workspace|model> <name> (unexpected extra argument %q)", args[2])
+	}
 	kind, err := normalizeKind(args[0])
 	if err != nil {
 		return err
@@ -916,6 +919,9 @@ func watchStreamLoop(stream watchStream, w io.Writer, atespace, name string) err
 func runDelete(serverURL, atespace string, args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: ax delete <task|gateway|workspace|model> <name>")
+	}
+	if len(args) > 2 {
+		return fmt.Errorf("usage: ax delete <task|gateway|workspace|model> <name> (unexpected extra argument %q)", args[2])
 	}
 	kind, err := normalizeKind(args[0])
 	if err != nil {

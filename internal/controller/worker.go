@@ -31,6 +31,16 @@ const (
 	// readRetryDelay is how long the worker waits after a transient error from the
 	// event queue before trying again.
 	readRetryDelay = time.Second
+	// readinessRequeueDelay is the default delay before the worker republishes a
+	// reconcile event for a task whose reconcile finished without reaching a
+	// ready state (workspace still initializing, or actor resumed without a
+	// worker assignment). Reconcile is purely event-driven: without this, a
+	// workspace setup outlasting the in-reconcile poll wedges the task in
+	// Initializing until an unrelated update arrives.
+	readinessRequeueDelay = 10 * time.Second
+	// requeueStoreTimeout bounds the re-read plus republish a delayed requeue
+	// performs.
+	requeueStoreTimeout = 10 * time.Second
 )
 
 // Worker consumes task events from the store's event queue and reconciles each
@@ -41,6 +51,8 @@ type Worker struct {
 	reconciler *TaskReconciler
 	group      string
 	consumer   string
+	// requeueDelay overrides readinessRequeueDelay; tests set it small.
+	requeueDelay time.Duration
 }
 
 // NewWorker creates a worker that joins group as consumer. An empty group uses the
@@ -54,10 +66,11 @@ func NewWorker(s store.Store, reconciler *TaskReconciler, group, consumer string
 		consumer = fmt.Sprintf("%s-%d", hostname, time.Now().UnixNano()%10000)
 	}
 	return &Worker{
-		store:      s,
-		reconciler: reconciler,
-		group:      group,
-		consumer:   consumer,
+		store:        s,
+		reconciler:   reconciler,
+		group:        group,
+		consumer:     consumer,
+		requeueDelay: readinessRequeueDelay,
 	}
 }
 
@@ -161,11 +174,80 @@ func (w *Worker) processEvent(ctx context.Context, ev store.TaskEvent) error {
 		return fmt.Errorf("reconciling task %s/%s: %w", task.Metadata.Atespace, task.Metadata.Name, err)
 	}
 
+	// Snapshot the requeue decision BEFORE UpdateTaskStatus: the store adopts
+	// the status pointer, so reading it afterwards would race a concurrent
+	// MarkTaskDeleting mutating the same struct.
+	needRequeue := w.readinessRequeueNeeded(reconciled)
+
 	if err := w.store.UpdateTaskStatus(ctx, task.Metadata.Atespace, task.Metadata.Name, reconciled.Status); err != nil {
 		return fmt.Errorf("updating task status %s/%s: %w", task.Metadata.Atespace, task.Metadata.Name, err)
 	}
 
+	// A reconcile that leaves the task still initializing (or still waiting
+	// for a worker assignment) gets no further events on its own: republish a
+	// reconcile event after a delay so the readiness poll runs again.
+	if needRequeue {
+		w.scheduleRequeue(ctx, ev.Atespace, ev.Name)
+	}
+
 	return nil
+}
+
+// readinessRequeueNeeded reports whether a reconciled task still needs its
+// readiness polled: running with workspace setup unfinished, or resumed but
+// not yet assigned to a worker. Anything else (suspended, failed, complete,
+// terminating) must not be requeued.
+func (w *Worker) readinessRequeueNeeded(task *v1alpha1.Task) bool {
+	if task == nil || task.Status == nil {
+		return false
+	}
+	switch task.Status.Phase {
+	case "Running":
+		return !w.reconciler.conditionTrue(task, condWorkspaceReady)
+	case "Pending":
+		// The empty-workerIP path: the actor is resumed but Substrate has not
+		// assigned it to a worker yet. Nothing else triggers a reconcile when
+		// the assignment lands, so poll again.
+		return task.Status.WorkerIp == ""
+	default:
+		return false
+	}
+}
+
+// scheduleRequeue republishes a reconcile event after the worker's requeue
+// delay so a still-initializing task is polled again. The task is re-read
+// first: a task that became ready, was suspended, failed, or was deleted in
+// the meantime is not requeued, and a deleted task is never resurrected by
+// the republish.
+func (w *Worker) scheduleRequeue(ctx context.Context, atespace, name string) {
+	delay := w.requeueDelay
+	if delay <= 0 {
+		delay = readinessRequeueDelay
+	}
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		rctx, cancel := context.WithTimeout(context.Background(), requeueStoreTimeout)
+		defer cancel()
+		task, err := w.store.GetTask(rctx, atespace, name)
+		if err != nil {
+			return
+		}
+		if !w.readinessRequeueNeeded(task) {
+			return
+		}
+		// SaveTask republishes the reconcile event; the status write itself is
+		// unchanged content.
+		if err := w.store.SaveTask(rctx, task); err != nil {
+			slog.Warn("failed to republish reconcile event for initializing task",
+				"atespace", atespace, "name", name, "error", err)
+		}
+	}()
 }
 
 // deleteTask tears down the Substrate actor and removes the task record. The

@@ -654,6 +654,13 @@ func emptyListMessage(resource, atespace string) string {
 	return fmt.Sprintf("No %s found in atespace %q.", resource, atespace)
 }
 
+// formatCommandLine renders a command argv slice the way a user would type
+// it. Printing the slice with %v shows Go syntax ("[a b]") in describe
+// output; joining with spaces shows the actual command line.
+func formatCommandLine(argv []string) string {
+	return strings.Join(argv, " ")
+}
+
 func runDescribe(serverURL, atespace string, args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: ax describe <task|gateway|workspace|model> <name>")
@@ -755,7 +762,11 @@ func runDescribe(serverURL, atespace string, args []string) error {
 						if s.Endpoint != "" {
 							fmt.Printf("  - %s: %s\n", s.Name, s.Endpoint)
 						} else {
-							fmt.Printf("  - %s: %s %v\n", s.Name, s.Command, s.Args)
+							cmdLine := s.Command
+							if argLine := formatCommandLine(s.Args); argLine != "" {
+								cmdLine += " " + argLine
+							}
+							fmt.Printf("  - %s: %s\n", s.Name, cmdLine)
 						}
 					}
 				}
@@ -852,7 +863,7 @@ func runDescribe(serverURL, atespace string, args []string) error {
 			fmt.Printf("Image:        %s\n", task.Spec.Image)
 		}
 		if len(task.Spec.Command) > 0 {
-			fmt.Printf("Command:      %v\n", task.Spec.Command)
+			fmt.Printf("Command:      %s\n", formatCommandLine(task.Spec.Command))
 		}
 	}
 

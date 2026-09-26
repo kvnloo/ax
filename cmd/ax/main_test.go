@@ -376,3 +376,26 @@ func TestSSHTargetActor(t *testing.T) {
 		})
 	}
 }
+
+// formatCommandLine must render argv slices the way a user would type them.
+// runDescribe used Go's %v on []string, printing "Command: [a b]" instead of
+// "Command: a b".
+func TestFormatCommandLine(t *testing.T) {
+	tests := []struct {
+		name string
+		argv []string
+		want string
+	}{
+		{"empty", nil, ""},
+		{"single", []string{"sh"}, "sh"},
+		{"multi", []string{"python3", "-u", "server.py"}, "python3 -u server.py"},
+		{"arg with spaces preserved", []string{"echo", "a b"}, "echo a b"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatCommandLine(tt.argv); got != tt.want {
+				t.Errorf("formatCommandLine(%v) = %q, want %q", tt.argv, got, tt.want)
+			}
+		})
+	}
+}

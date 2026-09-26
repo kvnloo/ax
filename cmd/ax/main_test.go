@@ -329,3 +329,50 @@ func TestParseGlobalArgsTrailingFlagNeedsValue(t *testing.T) {
 		t.Errorf("cleanArgs = %q, want [mytask -- --server]", cleanArgs)
 	}
 }
+func TestSSHTargetActor(t *testing.T) {
+	tests := []struct {
+		name string
+		task *v1alpha1.Task
+		want string
+	}{
+		{
+			"full task",
+			&v1alpha1.Task{
+				Metadata: &v1alpha1.ObjectMeta{Atespace: "prod"},
+				Status:   &v1alpha1.TaskStatus{Actor: "actor-1"},
+			},
+			"prod/actor-1",
+		},
+		{
+			"nil metadata does not panic",
+			&v1alpha1.Task{
+				Status: &v1alpha1.TaskStatus{Actor: "actor-1"},
+			},
+			"/actor-1",
+		},
+		{
+			"empty metadata",
+			&v1alpha1.Task{
+				Metadata: &v1alpha1.ObjectMeta{},
+				Status:   &v1alpha1.TaskStatus{Actor: "actor-1"},
+			},
+			"/actor-1",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got string
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Fatalf("sshTargetActor panicked: %v", r)
+					}
+				}()
+				got = sshTargetActor(tt.task)
+			}()
+			if got != tt.want {
+				t.Errorf("sshTargetActor() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

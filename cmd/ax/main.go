@@ -942,7 +942,7 @@ func runDescribe(serverURL, atespace string, args []string) error {
 			if gw.Spec.Egress != nil && gw.Spec.Egress.Allowlist != nil && len(gw.Spec.Egress.Allowlist.Hosts) > 0 {
 				fmt.Println("Egress Allowlist:")
 				for _, h := range gw.Spec.Egress.Allowlist.Hosts {
-					fmt.Printf("  - %s:%d\n", h.Host, h.Port)
+					fmt.Printf("  - %s\n", egressHostLabel(h))
 				}
 			}
 		}
@@ -1722,6 +1722,20 @@ func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 // this codebase defaults an empty value (there is no Gateway API defaulting
 // here), so an empty protocol renders as no annotation rather than a
 // fabricated "HTTP".
+// egressHostLabel renders an egress allowlist entry for `ax describe
+// gateway`. HostRule.Port is accepted by the manifest schema but nothing
+// enforces it — ApplyEgressPolicy (internal/substrate) ignores it and
+// GetPort() has no callers — so the label is the host alone. Rendering
+// "host:port" would assert behavior the server doesn't implement (same
+// fabrication class as the listener-protocol default). Matches the get
+// EGRESS-HOSTS column, which already renders host only.
+func egressHostLabel(h *v1alpha1.HostRule) string {
+	if h == nil {
+		return ""
+	}
+	return h.Host
+}
+
 func listenerProtocol(l *v1alpha1.Listener) string {
 	if l == nil || l.Protocol == "" {
 		return ""

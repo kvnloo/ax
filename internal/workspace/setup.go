@@ -143,7 +143,10 @@ func cloneRepos(ctx context.Context, repos []*v1alpha1.GitRepo, targetPath strin
 		}
 
 		branch := repo.Branch
-		if branch == "" {
+		// Whitespace-only is unset too: an empty branch defaults to main,
+		// but " " passed the empty check and sent git fetch at a branch
+		// named " ", failing through every retry before setup continued.
+		if strings.TrimSpace(branch) == "" {
 			branch = defaultBranch
 		}
 

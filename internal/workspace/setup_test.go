@@ -267,6 +267,67 @@ echo '3' > file.txt && git add . && git commit -m 'commit 3'
 	}
 }
 
+// TestSetupWorkspace_WhitespaceBranchDefaultsToMain: a whitespace-only
+// branch is unset and defaults to main before the git fetch. Without the
+// whitespace fold, the runner sent git fetch at a branch named " ",
+// failing through every retry and skipping the clone.
+func TestSetupWorkspace_WhitespaceBranchDefaultsToMain(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "ax-ws-branch-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	srcDir, err := os.MkdirTemp("", "ax-src-branch-*")
+	if err != nil {
+		t.Fatalf("failed to create src dir: %v", err)
+	}
+	defer os.RemoveAll(srcDir)
+
+	initCmd := exec.Command("sh", "-c", `
+git init &&
+git symbolic-ref HEAD refs/heads/main &&
+git config user.email 'test@ax.io' &&
+git config user.name 'AX' &&
+echo '1' > file.txt && git add . && git commit -m 'commit 1'
+`)
+	initCmd.Dir = srcDir
+	if out, err := initCmd.CombinedOutput(); err != nil {
+		t.Fatalf("failed to init test git repo: %v (%s)", err, string(out))
+	}
+
+	ws := &v1alpha1.Workspace{
+		Metadata: &v1alpha1.ObjectMeta{
+			Name: "test-branch-ws",
+		},
+		Spec: &v1alpha1.WorkspaceSpec{
+			Git: []*v1alpha1.GitRepo{
+				{
+					Name:   "ax",
+					Repo:   srcDir,
+					Branch: " ",
+				},
+			},
+		},
+	}
+
+	stateDir := filepath.Join(tempDir, "ax-state")
+	origAXDir := workspace.AXDir
+	workspace.AXDir = stateDir
+	defer func() { workspace.AXDir = origAXDir }()
+
+	res, err := workspace.SetupWorkspace(context.Background(), ws, tempDir, "")
+	if err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	if len(res.ClonedRepos) != 1 {
+		t.Fatalf("expected 1 cloned repo with whitespace-only branch, got %d", len(res.ClonedRepos))
+	}
+	if _, err := os.Stat(filepath.Join(tempDir, "ax", "file.txt")); err != nil {
+		t.Errorf("cloned repo missing file.txt: %v", err)
+	}
+}
+
 func TestMarkerName(t *testing.T) {
 	tests := map[string]string{
 		"/workspace":        "initialized-workspace",

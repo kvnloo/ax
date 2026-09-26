@@ -906,10 +906,7 @@ func runDescribe(serverURL, atespace string, args []string) error {
 			if len(ws.Spec.Git) > 0 {
 				fmt.Println("Git Repositories:")
 				for _, g := range ws.Spec.Git {
-					branch := g.Branch
-					if branch == "" {
-						branch = "main"
-					}
+					branch := displayBranch(g.Branch)
 					fmt.Printf("  - %s (%s, branch: %s)\n", g.Name, g.Repo, branch)
 				}
 			}
@@ -1865,6 +1862,18 @@ func displayWorkerIP(workerIP string) string {
 		return w
 	}
 	return "<none>"
+}
+
+// displayBranch renders a workspace git repo branch for `ax describe
+// workspace`: whitespace-only counts as unset and reads "main", matching the
+// runner's workspace setup, which defaults unset branches to main before
+// fetching. Without this, `ax describe workspace` showed the raw whitespace
+// while the runner had to fail its git fetch on a " " branch first.
+func displayBranch(branch string) string {
+	if b := strings.TrimSpace(branch); b != "" {
+		return b
+	}
+	return "main"
 }
 
 func listenerProtocol(l *v1alpha1.Listener) string {

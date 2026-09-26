@@ -1178,6 +1178,38 @@ func releaseSSHSession(cleanup func(), closers ...func() error) {
 	}
 }
 
+// portForwardFn is tunnel.PortForward as a variable so tests can stub the
+// kubectl port-forward.
+var portForwardFn = tunnel.PortForward
+
+// dialRouterGuest dials the guest daemon through the atenet-router
+// port-forward and verifies the path speaks gRPC before returning. A dead
+// router (port-forward up, nothing serving gRPC) fails fast here with a
+// clear error instead of surfacing at the first Exec RPC.
+func dialRouterGuest(kubeContext, targetActor string) (*guest.Client, func(), error) {
+	localPort, pfCleanup, err := portForwardFn(context.Background(), kubeContext, "ate-system", "svc/atenet-router", 80)
+	if err != nil {
+		return nil, nil, fmt.Errorf("establishing port-forward to atenet-router: %w", err)
+	}
+	routerEndpoint := fmt.Sprintf("127.0.0.1:%d", localPort)
+	c, err := guest.DialTarget(routerEndpoint, targetActor)
+	if err != nil {
+		pfCleanup()
+		return nil, nil, fmt.Errorf("connecting to guest via atenet-router at %s: %w", routerEndpoint, err)
+	}
+	// The gRPC dial above is lazy: verify the router path actually speaks
+	// gRPC before committing to it.
+	readyCtx, readyCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	readyErr := c.WaitReady(readyCtx)
+	readyCancel()
+	if readyErr != nil {
+		_ = c.Close()
+		pfCleanup()
+		return nil, nil, fmt.Errorf("atenet-router at %s not serving gRPC: %w", routerEndpoint, readyErr)
+	}
+	return c, pfCleanup, nil
+}
+
 func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: ax ssh <task-name> [-- command...]")
@@ -1275,16 +1307,12 @@ func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 	}
 	if !directOK {
 		// 2. Connect via the Substrate atenet-router service in ate-system (port 80)
-		localPort, pfCleanup, err := tunnel.PortForward(context.Background(), kubeContext, "ate-system", "svc/atenet-router", 80)
+		var pfCleanup func()
+		guestClient, pfCleanup, err = dialRouterGuest(kubeContext, targetActor)
 		if err != nil {
-			return fmt.Errorf("establishing port-forward to atenet-router: %w", err)
+			return err
 		}
 		cleanup = pfCleanup
-		routerEndpoint := fmt.Sprintf("127.0.0.1:%d", localPort)
-		guestClient, err = guest.DialTarget(routerEndpoint, targetActor)
-		if err != nil {
-			return fmt.Errorf("connecting to guest via atenet-router at %s: %w", routerEndpoint, err)
-		}
 	}
 
 	if cleanup != nil {

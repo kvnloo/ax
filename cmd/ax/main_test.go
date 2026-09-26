@@ -196,3 +196,48 @@ func TestRemoteExitCleanupMechanic(t *testing.T) {
 		}
 	}
 }
+
+// A bare "--" ends global option parsing: words after it are positional even
+// when they look like global flags, so the remote command of
+// `ax ssh mytask -- env --server` reaches the guest intact. On the old
+// parser the trailing "--server" was silently swallowed and "--context=prod"
+// was consumed as the CLI's own kube context.
+func TestParseGlobalArgsDashDashPassthrough(t *testing.T) {
+	cmd, cleanArgs, _, explicitServer, kubeContext, _ := parseGlobalArgs(
+		[]string{"ssh", "mytask", "--", "env", "--server"})
+	if cmd != "ssh" {
+		t.Fatalf("cmd = %q, want ssh", cmd)
+	}
+	if explicitServer != "" {
+		t.Fatalf("explicitServer = %q, want empty (flag belongs to the remote command)", explicitServer)
+	}
+	want := []string{"mytask", "--", "env", "--server"}
+	if strings.Join(cleanArgs, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("cleanArgs = %q, want %q", cleanArgs, want)
+	}
+
+	_, cleanArgs, _, _, kubeContext, _ = parseGlobalArgs(
+		[]string{"ssh", "mytask", "--", "echo", "--context=prod"})
+	if kubeContext != "" {
+		t.Fatalf("kubeContext = %q, want empty (flag belongs to the remote command)", kubeContext)
+	}
+	want = []string{"mytask", "--", "echo", "--context=prod"}
+	if strings.Join(cleanArgs, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("cleanArgs = %q, want %q", cleanArgs, want)
+	}
+}
+
+// Global flags before the command still parse as before.
+func TestParseGlobalArgsFlagsBeforeCommand(t *testing.T) {
+	cmd, cleanArgs, atespace, explicitServer, kubeContext, axNamespace := parseGlobalArgs(
+		[]string{"--server=http://x:1", "--context", "prod", "get", "tasks"})
+	if cmd != "get" || explicitServer != "http://x:1" || kubeContext != "prod" {
+		t.Fatalf("got cmd=%q server=%q context=%q", cmd, explicitServer, kubeContext)
+	}
+	if atespace != "default" || axNamespace != "ax-system" {
+		t.Fatalf("defaults changed: atespace=%q namespace=%q", atespace, axNamespace)
+	}
+	if len(cleanArgs) != 1 || cleanArgs[0] != "tasks" {
+		t.Fatalf("cleanArgs = %q, want [tasks]", cleanArgs)
+	}
+}

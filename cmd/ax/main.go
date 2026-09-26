@@ -45,52 +45,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	var (
-		cmd            string
-		cleanArgs      []string
-		atespace       = "default"
-		explicitServer = ""
-		kubeContext    = ""
-		axNamespace    = "ax-system"
-	)
-
-	args := os.Args[1:]
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "-a" || arg == "--atespace" {
-			if i+1 < len(args) {
-				atespace = args[i+1]
-				i++
-			}
-		} else if strings.HasPrefix(arg, "--atespace=") {
-			atespace = strings.TrimPrefix(arg, "--atespace=")
-		} else if arg == "--server" {
-			if i+1 < len(args) {
-				explicitServer = args[i+1]
-				i++
-			}
-		} else if strings.HasPrefix(arg, "--server=") {
-			explicitServer = strings.TrimPrefix(arg, "--server=")
-		} else if arg == "--context" {
-			if i+1 < len(args) {
-				kubeContext = args[i+1]
-				i++
-			}
-		} else if strings.HasPrefix(arg, "--context=") {
-			kubeContext = strings.TrimPrefix(arg, "--context=")
-		} else if arg == "-n" || arg == "--namespace" {
-			if i+1 < len(args) {
-				axNamespace = args[i+1]
-				i++
-			}
-		} else if strings.HasPrefix(arg, "--namespace=") {
-			axNamespace = strings.TrimPrefix(arg, "--namespace=")
-		} else if cmd == "" && !strings.HasPrefix(arg, "-") {
-			cmd = arg
-		} else {
-			cleanArgs = append(cleanArgs, arg)
-		}
-	}
+	cmd, cleanArgs, atespace, explicitServer, kubeContext, axNamespace := parseGlobalArgs(os.Args[1:])
 
 	if cmd == "" {
 		printUsage()
@@ -157,6 +112,64 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// parseGlobalArgs splits the command line into the ax command, the remaining
+// positional args, and the global flags (--atespace, --server, --context,
+// --namespace). A bare "--" ends option parsing: everything after it is
+// positional, even if it looks like a global flag, so the remote command in
+// `ax ssh mytask -- env --server` reaches the guest intact instead of being
+// swallowed by the global parser.
+func parseGlobalArgs(args []string) (cmd string, cleanArgs []string, atespace, explicitServer, kubeContext, axNamespace string) {
+	atespace = "default"
+	axNamespace = "ax-system"
+	noMoreFlags := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !noMoreFlags && arg == "--" {
+			noMoreFlags = true
+			cleanArgs = append(cleanArgs, arg)
+			continue
+		}
+		if noMoreFlags {
+			cleanArgs = append(cleanArgs, arg)
+			continue
+		}
+		if arg == "-a" || arg == "--atespace" {
+			if i+1 < len(args) {
+				atespace = args[i+1]
+				i++
+			}
+		} else if strings.HasPrefix(arg, "--atespace=") {
+			atespace = strings.TrimPrefix(arg, "--atespace=")
+		} else if arg == "--server" {
+			if i+1 < len(args) {
+				explicitServer = args[i+1]
+				i++
+			}
+		} else if strings.HasPrefix(arg, "--server=") {
+			explicitServer = strings.TrimPrefix(arg, "--server=")
+		} else if arg == "--context" {
+			if i+1 < len(args) {
+				kubeContext = args[i+1]
+				i++
+			}
+		} else if strings.HasPrefix(arg, "--context=") {
+			kubeContext = strings.TrimPrefix(arg, "--context=")
+		} else if arg == "-n" || arg == "--namespace" {
+			if i+1 < len(args) {
+				axNamespace = args[i+1]
+				i++
+			}
+		} else if strings.HasPrefix(arg, "--namespace=") {
+			axNamespace = strings.TrimPrefix(arg, "--namespace=")
+		} else if cmd == "" && !strings.HasPrefix(arg, "-") {
+			cmd = arg
+		} else {
+			cleanArgs = append(cleanArgs, arg)
+		}
+	}
+	return cmd, cleanArgs, atespace, explicitServer, kubeContext, axNamespace
 }
 
 func printUsage() {

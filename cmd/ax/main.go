@@ -1593,6 +1593,21 @@ func sshTaskName(task *v1alpha1.Task) string {
 	return ""
 }
 
+// sshTaskAndCommand splits the ssh args into the task name and the remote
+// command. A leading "--" separator (kept in cleanArgs by parseGlobalArgs)
+// is not a task name: `ax ssh -- mytask` must fetch "mytask", not try to
+// fetch a task literally named "--".
+func sshTaskAndCommand(args []string) (string, []string) {
+	rest := args
+	if len(rest) > 0 && rest[0] == "--" {
+		rest = rest[1:]
+	}
+	if len(rest) == 0 {
+		return "", nil
+	}
+	return rest[0], parseSSHCommand(rest[1:])
+}
+
 // parseSSHCommand extracts the remote command from the ssh args (everything
 // after the task name). A "--" separator marks the rest of the line as the
 // command verbatim; the words after it are appended to any command words
@@ -1618,8 +1633,10 @@ func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 		return fmt.Errorf("usage: ax ssh <task-name> [-- command...]")
 	}
 
-	taskName := args[0]
-	cmdToRun := parseSSHCommand(args[1:])
+	taskName, cmdToRun := sshTaskAndCommand(args)
+	if taskName == "" {
+		return fmt.Errorf("usage: ax ssh <task-name> [-- command...]")
+	}
 
 	client, conn, err := getAXClient(serverURL)
 	if err != nil {

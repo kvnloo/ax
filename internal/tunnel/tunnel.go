@@ -480,6 +480,33 @@ func spawnTunnel(ctxName, dir string, opts Options) (string, error) {
 		return "", fmt.Errorf("timeout waiting for kubectl port-forward on context %q: %s", ctxName, strings.TrimSpace(string(logData)))
 	}
 
+	// Record the tunnel state BEFORE the health wait below. A SIGKILL of
+	// the CLI in the health window used to orphan a stateless kubectl
+	// port-forward: no state file existed yet, so the next EnsureServerURL
+	// could neither find nor reap it, and a duplicate tunnel was spawned.
+	// With the entry recorded early, a crash leaves a state file whose PID
+	// the reuse path verifies (isPortForwardProcess) and reaps via
+	// StopTunnel instead of leaking. The health-failure paths below remove
+	// the entry again, so a half-started tunnel never lingers as Stale.
+	info := &TunnelInfo{
+		Context:   ctxName,
+		Namespace: opts.Namespace,
+		Service:   opts.Service,
+		Port:      localPort,
+		PID:       cmd.Process.Pid,
+		CreatedAt: time.Now(),
+	}
+	if err := SaveTunnel(info); err != nil {
+		killAndReapChild(cmd)
+		return "", fmt.Errorf("recording tunnel state: %w", err)
+	}
+	dropState := func() {
+		dir, err := TunnelDir()
+		if err == nil {
+			_ = os.Remove(filepath.Join(dir, SanitizeContext(ctxName)+".json"))
+		}
+	}
+
 	// Wait for healthz to respond
 	healthy := false
 	healthDeadline := time.Now().Add(3 * time.Second)
@@ -490,6 +517,7 @@ func spawnTunnel(ctxName, dir string, opts Options) (string, error) {
 		// the same false-Active class the reuse path guards against. Probe
 		// liveness here too, and fail fast with kubectl's own output.
 		if childExited(cmd.Process.Pid) {
+			dropState()
 			logData, _ := os.ReadFile(logPath)
 			return "", fmt.Errorf("kubectl port-forward exited for context %q: %s", ctxName, strings.TrimSpace(string(logData)))
 		}
@@ -502,6 +530,7 @@ func spawnTunnel(ctxName, dir string, opts Options) (string, error) {
 
 	if !healthy {
 		killAndReapChild(cmd)
+		dropState()
 		return "", fmt.Errorf("tunnel started on port %d but health check failed for context %q", localPort, ctxName)
 	}
 
@@ -511,18 +540,6 @@ func spawnTunnel(ctxName, dir string, opts Options) (string, error) {
 	// Without this Wait the child would linger as a zombie for the rest of
 	// the CLI's lifetime after being stopped.
 	detachReap(cmd)
-
-	info := &TunnelInfo{
-		Context:   ctxName,
-		Namespace: opts.Namespace,
-		Service:   opts.Service,
-		Port:      localPort,
-		PID:       cmd.Process.Pid,
-		CreatedAt: time.Now(),
-	}
-	if err := recordTunnelOrCleanup(info, cmd); err != nil {
-		return "", err
-	}
 
 	return fmt.Sprintf("http://127.0.0.1:%d", localPort), nil
 }

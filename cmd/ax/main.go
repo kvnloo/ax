@@ -1143,6 +1143,11 @@ func parseSuspendResumeName(verb string, args []string) (string, error) {
 }
 
 func formatAge(d time.Duration) string {
+	if d < 0 {
+		// A CreationTimestamp in the future (client/server clock skew, a
+		// restored backup) must not render as a negative age like "-5s".
+		d = 0
+	}
 	if d < time.Minute {
 		return fmt.Sprintf("%ds", int(d.Seconds()))
 	}

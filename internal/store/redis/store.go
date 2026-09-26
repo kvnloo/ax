@@ -749,18 +749,40 @@ func (s *Store) Subscribe(ctx context.Context, group, consumer string) (store.Su
 	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
 		return nil, fmt.Errorf("creating consumer group %q: %w", group, err)
 	}
-	return &subscription{store: s, group: group, consumer: consumer}, nil
+	return &subscription{store: s, client: s.client, group: group, consumer: consumer}, nil
 }
 
 // subscription reads from a consumer group in batches and hands events out one
 // at a time. Delivery is at-least-once: an event stays in the group's pending
 // list until Ack is called for it, and entries orphaned by a dead consumer are
-// reclaimed by idle subscribers after ClaimMinIdle.
+// reclaimed by subscribers after ClaimMinIdle — on idle polls and, so failover
+// is not coupled to traffic, periodically on busy reads too.
 type subscription struct {
 	store    *Store
+	client   eventStreamClient
 	group    string
 	consumer string
 	pending  []store.TaskEvent
+	// lastClaim is when this subscriber last swept the group's pending list
+	// for orphaned entries. It throttles the busy-read sweep to one pass per
+	// ClaimMinIdle so a loaded stream does not pay an XAUTOCLAIM round-trip
+	// on every read.
+	lastClaim time.Time
+}
+
+// eventStreamClient is the slice of the go-redis client the task-event
+// subscription needs. *redis.Client satisfies it; the interface exists so
+// tests can stub the transport (scripted XREADGROUP/XAUTOCLAIM results)
+// without a live server.
+type eventStreamClient interface {
+	XReadGroup(ctx context.Context, args *redis.XReadGroupArgs) *redis.XStreamSliceCmd
+	XAutoClaim(ctx context.Context, args *redis.XAutoClaimArgs) *redis.XAutoClaimCmd
+}
+
+// claimDue reports whether enough time has passed since this subscriber's
+// last pending-list sweep to justify another one.
+func (sub *subscription) claimDue() bool {
+	return time.Since(sub.lastClaim) >= sub.store.opts.ClaimMinIdle
 }
 
 func (sub *subscription) Next(ctx context.Context) (store.TaskEvent, error) {
@@ -780,9 +802,10 @@ func (sub *subscription) Next(ctx context.Context) (store.TaskEvent, error) {
 }
 
 // read performs one blocking XREADGROUP call. It returns an empty slice, not an
-// error, when the block time elapses without events.
+// error, when the block time elapses without events. Claimed (older) entries
+// are delivered before new ones.
 func (sub *subscription) read(ctx context.Context) ([]store.TaskEvent, error) {
-	streams, err := sub.store.client.XReadGroup(ctx, &redis.XReadGroupArgs{
+	streams, err := sub.client.XReadGroup(ctx, &redis.XReadGroupArgs{
 		Group:    sub.group,
 		Consumer: sub.consumer,
 		Streams:  []string{sub.store.opts.StreamName, ">"},
@@ -800,6 +823,7 @@ func (sub *subscription) read(ctx context.Context) ([]store.TaskEvent, error) {
 			if claimed, err := sub.claimStale(ctx); err != nil {
 				slog.Warn("could not reclaim stale task events (continuing without reclaim)", "error", err)
 			} else {
+				sub.lastClaim = time.Now()
 				return claimed, nil
 			}
 			return nil, nil
@@ -812,6 +836,22 @@ func (sub *subscription) read(ctx context.Context) ([]store.TaskEvent, error) {
 		for _, msg := range stream.Messages {
 			events = append(events, eventFromMessage(msg))
 		}
+	}
+
+	// A busy stream never hits the idle path above, so without this a dead
+	// consumer's pending entries idle forever while new events keep flowing —
+	// failover latency would be unbounded and coupled to traffic. Sweep at
+	// most once per ClaimMinIdle: claimed entries are older than anything the
+	// ">" read just returned, so they go first.
+	if sub.claimDue() {
+		if claimed, err := sub.claimStale(ctx); err != nil {
+			// Same swallow policy as the idle path: an old server without
+			// XAUTOCLAIM must not wedge the worker under load either.
+			slog.Warn("could not reclaim stale task events on busy read (continuing)", "error", err)
+		} else {
+			events = append(claimed, events...)
+		}
+		sub.lastClaim = time.Now()
 	}
 	return events, nil
 }
@@ -826,7 +866,7 @@ func (sub *subscription) claimStale(ctx context.Context) ([]store.TaskEvent, err
 	var events []store.TaskEvent
 	start := "0-0"
 	for {
-		claimed, next, err := sub.store.client.XAutoClaim(ctx, &redis.XAutoClaimArgs{
+		claimed, next, err := sub.client.XAutoClaim(ctx, &redis.XAutoClaimArgs{
 			Stream:   sub.store.opts.StreamName,
 			Group:    sub.group,
 			Consumer: sub.consumer,

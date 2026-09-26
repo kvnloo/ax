@@ -723,7 +723,7 @@ func runDescribe(serverURL, atespace string, args []string) error {
 				}
 				sort.Strings(keys)
 				for _, k := range keys {
-					fmt.Printf("  %s: %v\n", k, params[k])
+					fmt.Printf("  %s: %s\n", k, formatParamValue(params[k]))
 				}
 			}
 			if m.Spec.SecretKey != nil {
@@ -1552,6 +1552,34 @@ func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 	}
 
 	return nil
+}
+
+// formatParamValue renders a model parameter value for `ax describe model`.
+// Printing the raw value with %v leaks Go syntax ("map[x:y]", "[p q]") for
+// nested maps and slices; this renders them recursively in a readable
+// key=value / comma-joined form instead. Scalar values keep their %v form.
+func formatParamValue(v any) string {
+	switch t := v.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, k+"="+formatParamValue(t[k]))
+		}
+		return "{" + strings.Join(parts, ", ") + "}"
+	case []any:
+		parts := make([]string, 0, len(t))
+		for _, e := range t {
+			parts = append(parts, formatParamValue(e))
+		}
+		return "[" + strings.Join(parts, ", ") + "]"
+	default:
+		return fmt.Sprintf("%v", v)
+	}
 }
 
 // sortByName orders list rows by their object name so `ax get` output is

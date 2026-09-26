@@ -597,6 +597,29 @@ func validateGetArgs(args []string) (string, error) {
 }
 
 // runGetWithClient is the dial-free core of runGet, so tests can drive it
+// The server caps ListTasks at 50 rows per page. Fetching only the first
+// page would silently truncate `ax get tasks` on busy fleets, so page
+// through until a short page.
+const taskListPageSize = 100
+
+func listAllTasks(ctx context.Context, client v1alpha1.AXClient, atespace string) ([]*v1alpha1.Task, error) {
+	var all []*v1alpha1.Task
+	for {
+		resp, err := client.ListTasks(ctx, &v1alpha1.ListTasksRequest{
+			Atespace: atespace,
+			Limit:    taskListPageSize,
+			Offset:   int64(len(all)),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("listing tasks: %w", err)
+		}
+		all = append(all, resp.Tasks...)
+		if int64(len(resp.Tasks)) < taskListPageSize {
+			return all, nil
+		}
+	}
+}
+
 // with a fake client.
 func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace string, args []string) error {
 	resource, err := validateGetArgs(args)
@@ -605,12 +628,12 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 	}
 
 	if resource == v1alpha1.KindTask && len(args) == 1 {
-		resp, err := client.ListTasks(ctx, &v1alpha1.ListTasksRequest{Atespace: atespace})
+		tasks, err := listAllTasks(ctx, client, atespace)
 		if err != nil {
-			return fmt.Errorf("listing tasks: %w", err)
+			return err
 		}
 
-		tasks := sortByName(resp.Tasks, func(t *v1alpha1.Task) string { return objectName(t.Metadata) })
+		tasks = sortByName(tasks, func(t *v1alpha1.Task) string { return objectName(t.Metadata) })
 		if len(tasks) == 0 {
 			fmt.Println(emptyListMessage("tasks", atespace))
 			return nil

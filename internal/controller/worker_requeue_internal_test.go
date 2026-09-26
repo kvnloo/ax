@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/ax/internal/store"
 	"github.com/google/ax/internal/store/memory"
 	"github.com/google/ax/pkg/apis/v1alpha1"
 )
@@ -150,5 +151,109 @@ func TestScheduleRequeueSkipsDeletedTask(t *testing.T) {
 	defer rcancel()
 	if ev, err := sub.Next(rctx); err == nil {
 		t.Errorf("deleted task was resurrected by requeue: %+v", ev)
+	}
+}
+
+// TestInitRequeueExhaustion pins the stuck-task budget: with maxInitRequeues=2
+// the first two consecutive still-initializing reconciles keep polling, the
+// third exhausts the budget. On base (no noteInitRequeue) this file does not
+// compile.
+func TestInitRequeueExhaustion(t *testing.T) {
+	w := NewWorker(memory.NewStore(), NewTaskReconciler(nil, "t", "a"), "g", "c")
+	w.maxInitRequeues = 2
+	key := "default/stuck"
+	if w.noteInitRequeue(key, true) {
+		t.Error("poll 1 of budget 2: exhausted, want keep polling")
+	}
+	if w.noteInitRequeue(key, true) {
+		t.Error("poll 2 of budget 2: exhausted, want keep polling")
+	}
+	if !w.noteInitRequeue(key, true) {
+		t.Error("poll 3 of budget 2: not exhausted, want give up")
+	}
+}
+
+// TestInitRequeueResetsWhenReady pins that a reconcile which leaves the task
+// no longer initializing clears the stuck-task budget, so a later new
+// initializing spell starts fresh instead of inheriting the old count.
+func TestInitRequeueResetsWhenReady(t *testing.T) {
+	w := NewWorker(memory.NewStore(), NewTaskReconciler(nil, "t", "a"), "g", "c")
+	w.maxInitRequeues = 1
+	key := "default/flaky"
+	if w.noteInitRequeue(key, true) {
+		t.Fatal("poll 1 of budget 1: exhausted, want keep polling")
+	}
+	if w.noteInitRequeue(key, false) {
+		t.Fatal("ready reconcile: exhausted, want budget cleared")
+	}
+	if w.noteInitRequeue(key, true) {
+		t.Error("first poll of the new spell: exhausted, want fresh budget")
+	}
+}
+
+// TestFinishRequeueDecisionGivesUpAndFailsTask is the behavioral red test for
+// the unbounded-requeue defect: without the cap, a task whose workspace setup
+// never completes republishes reconcile events forever. With the cap, the
+// worker marks it Failed with an InitializationTimeout reason and stops
+// requeueing.
+func TestFinishRequeueDecisionGivesUpAndFailsTask(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st := memory.NewStore()
+	sub, err := st.Subscribe(ctx, "g", "c")
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	task := requeueTestTask("stuck", "Running", "10.0.0.1", false)
+	if err := st.SaveTask(ctx, task); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if _, err := sub.Next(ctx); err != nil { // drain the seed event
+		t.Fatalf("drain seed event: %v", err)
+	}
+
+	w := NewWorker(st, NewTaskReconciler(nil, "t", "a"), "g", "c")
+	w.maxInitRequeues = 1
+	w.requeueDelay = time.Hour // must not fire during the test
+	ev := store.TaskEvent{Action: "reconcile", Atespace: "default", Name: "stuck"}
+
+	// First still-initializing reconcile: budget remains, task keeps polling.
+	if err := w.finishRequeueDecision(ctx, ev, task, true); err != nil {
+		t.Fatalf("first decision: %v", err)
+	}
+	got, err := st.GetTask(ctx, "default", "stuck")
+	if err != nil {
+		t.Fatalf("get after first decision: %v", err)
+	}
+	if got.Status.Phase != "Running" {
+		t.Fatalf("phase after first decision = %q, want Running", got.Status.Phase)
+	}
+
+	// Second consecutive still-initializing reconcile: budget exhausted, the
+	// task must be marked Failed with a clear reason, not requeued.
+	if err := w.finishRequeueDecision(ctx, ev, task, true); err != nil {
+		t.Fatalf("second decision: %v", err)
+	}
+	got, err = st.GetTask(ctx, "default", "stuck")
+	if err != nil {
+		t.Fatalf("get after give-up: %v", err)
+	}
+	if got.Status.Phase != "Failed" {
+		t.Errorf("phase after give-up = %q, want Failed", got.Status.Phase)
+	}
+	found := false
+	for _, c := range got.Status.Conditions {
+		if c.Type == condReady && c.Status == "False" && c.Reason == "InitializationTimeout" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no Ready=False/InitializationTimeout condition after give-up: %+v", got.Status.Conditions)
+	}
+
+	rctx, rcancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer rcancel()
+	if ev2, err := sub.Next(rctx); err == nil {
+		t.Errorf("timed-out task was requeued: %+v", ev2)
 	}
 }

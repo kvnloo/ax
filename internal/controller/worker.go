@@ -41,6 +41,16 @@ const (
 	// requeueStoreTimeout bounds the re-read plus republish a delayed requeue
 	// performs.
 	requeueStoreTimeout = 10 * time.Second
+	// defaultMaxInitRequeues bounds how many consecutive still-initializing
+	// reconciles a task gets before the worker fails it instead of requeueing
+	// forever. With the default 10s requeue delay this is ~30 minutes of
+	// initialization polling. Without the bound, a task whose workspace setup
+	// (or worker assignment) never completes would republish reconcile events
+	// forever, burning a full readiness poll (WorkspaceReadyTimeout) per cycle
+	// and starving real work. The counter is per-worker and in-memory: a worker
+	// restart grants a fresh budget, and any reconcile that leaves the task no
+	// longer initializing clears it.
+	defaultMaxInitRequeues = 180
 )
 
 // Worker consumes task events from the store's event queue and reconciles each
@@ -53,6 +63,12 @@ type Worker struct {
 	consumer   string
 	// requeueDelay overrides readinessRequeueDelay; tests set it small.
 	requeueDelay time.Duration
+	// initRequeueCounts tracks consecutive still-initializing reconciles per
+	// task ("atespace/name") so a permanently-stuck task fails loudly instead
+	// of requeueing forever. Touched only by the Run loop goroutine.
+	initRequeueCounts map[string]int
+	// maxInitRequeues overrides defaultMaxInitRequeues; tests set it small.
+	maxInitRequeues int
 }
 
 // NewWorker creates a worker that joins group as consumer. An empty group uses the
@@ -66,11 +82,13 @@ func NewWorker(s store.Store, reconciler *TaskReconciler, group, consumer string
 		consumer = fmt.Sprintf("%s-%d", hostname, time.Now().UnixNano()%10000)
 	}
 	return &Worker{
-		store:        s,
-		reconciler:   reconciler,
-		group:        group,
-		consumer:     consumer,
-		requeueDelay: readinessRequeueDelay,
+		store:             s,
+		reconciler:        reconciler,
+		group:             group,
+		consumer:          consumer,
+		requeueDelay:      readinessRequeueDelay,
+		initRequeueCounts: make(map[string]int),
+		maxInitRequeues:   defaultMaxInitRequeues,
 	}
 }
 
@@ -184,13 +202,62 @@ func (w *Worker) processEvent(ctx context.Context, ev store.TaskEvent) error {
 	}
 
 	// A reconcile that leaves the task still initializing (or still waiting
-	// for a worker assignment) gets no further events on its own: republish a
-	// reconcile event after a delay so the readiness poll runs again.
+	// for a worker assignment) gets no further events on its own: either
+	// republish a reconcile event after a delay so the readiness poll runs
+	// again, or — if the task has been stuck initializing for
+	// maxInitRequeues consecutive reconciles — fail it loudly instead of
+	// burning a full readiness poll every requeueDelay forever.
+	return w.finishRequeueDecision(ctx, ev, reconciled, needRequeue)
+}
+
+// finishRequeueDecision implements the tail of processEvent for a successful
+// reconcile: requeue still-initializing tasks, fail permanently-stuck ones,
+// and reset the stuck-task budget for tasks that no longer need polling.
+func (w *Worker) finishRequeueDecision(ctx context.Context, ev store.TaskEvent, reconciled *v1alpha1.Task, needRequeue bool) error {
+	key := ev.Atespace + "/" + ev.Name
+	if w.noteInitRequeue(key, needRequeue) {
+		max := w.effectiveMaxInitRequeues()
+		reconciled.Status.Phase = "Failed"
+		w.reconciler.setCondition(reconciled, condReady, "False", "InitializationTimeout",
+			fmt.Sprintf("task still initializing after %d reconcile polls; workspace setup or worker assignment never completed", max),
+			time.Now())
+		if err := w.store.UpdateTaskStatus(ctx, reconciled.Metadata.Atespace, reconciled.Metadata.Name, reconciled.Status); err != nil {
+			return fmt.Errorf("marking timed-out initializing task failed %s/%s: %w", reconciled.Metadata.Atespace, reconciled.Metadata.Name, err)
+		}
+		slog.Warn("task initialization timed out; marked failed instead of requeueing",
+			"atespace", ev.Atespace, "name", ev.Name, "polls", max)
+		return nil
+	}
 	if needRequeue {
 		w.scheduleRequeue(ctx, ev.Atespace, ev.Name)
 	}
-
 	return nil
+}
+
+// effectiveMaxInitRequeues normalizes the configured cap (a non-positive
+// value means "use the default").
+func (w *Worker) effectiveMaxInitRequeues() int {
+	if w.maxInitRequeues <= 0 {
+		return defaultMaxInitRequeues
+	}
+	return w.maxInitRequeues
+}
+
+// noteInitRequeue records one more consecutive still-initializing reconcile
+// for key and reports whether the task has exhausted its initialization
+// budget. A reconcile that does not need a requeue clears the count, so a
+// new initializing spell starts with a fresh budget.
+func (w *Worker) noteInitRequeue(key string, stillInitializing bool) (exhausted bool) {
+	if !stillInitializing {
+		delete(w.initRequeueCounts, key)
+		return false
+	}
+	w.initRequeueCounts[key]++
+	if w.initRequeueCounts[key] > w.effectiveMaxInitRequeues() {
+		delete(w.initRequeueCounts, key)
+		return true
+	}
+	return false
 }
 
 // readinessRequeueNeeded reports whether a reconciled task still needs its

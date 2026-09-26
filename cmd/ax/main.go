@@ -960,12 +960,11 @@ func runDescribe(serverURL, atespace string, args []string) error {
 		taskName = task.Metadata.Name
 		taskAtespace = task.Metadata.Atespace
 	}
-	phase := ""
+	phase := describeTaskPhase(task)
 	actor := ""
 	workerIP := ""
 	var conditions []*v1alpha1.Condition
 	if task.Status != nil {
-		phase = task.Status.Phase
 		actor = task.Status.Actor
 		workerIP = task.Status.WorkerIp
 		conditions = task.Status.Conditions
@@ -1734,6 +1733,17 @@ func egressHostLabel(h *v1alpha1.HostRule) string {
 		return ""
 	}
 	return h.Host
+}
+
+// describeTaskPhase is the Phase line for `ax describe task`. The get list
+// defaults an unset phase to "Pending", and both stores set Phase to
+// "Pending" on creation — describe does the same instead of printing a
+// blank line for a status-less task.
+func describeTaskPhase(task *v1alpha1.Task) string {
+	if task != nil && task.Status != nil && task.Status.Phase != "" {
+		return task.Status.Phase
+	}
+	return "Pending"
 }
 
 func listenerProtocol(l *v1alpha1.Listener) string {

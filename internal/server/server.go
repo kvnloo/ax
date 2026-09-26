@@ -217,6 +217,9 @@ func (s *Server) WatchTask(req *v1alpha1.WatchTaskRequest, stream grpc.ServerStr
 		if err := stream.Send(&v1alpha1.WatchTaskResponse{Task: initial, Action: "INITIAL"}); err != nil {
 			return err
 		}
+		if isWatchTerminal(initial) {
+			return nil
+		}
 	}
 
 	for {
@@ -230,11 +233,27 @@ func (s *Server) WatchTask(req *v1alpha1.WatchTaskRequest, stream grpc.ServerStr
 			if err := stream.Send(&v1alpha1.WatchTaskResponse{Task: task, Action: "MODIFIED"}); err != nil {
 				return err
 			}
-			if task.Status != nil && (task.Status.Phase == "Running" || task.Status.Phase == "Failed" || task.Status.Phase == "Completed") {
+			if isWatchTerminal(task) {
 				return nil
 			}
 		}
 	}
+}
+
+// isWatchTerminal reports whether a watched task has reached a phase the
+// server will not wait past. Deletion is two-phase: MarkTaskDeleting flips
+// the record to Terminating and the controller removes it later, and no
+// further watch notification is published on removal — so a watch that is
+// not ended at Terminating would block until the client gives up.
+func isWatchTerminal(task *v1alpha1.Task) bool {
+	if task == nil || task.Status == nil {
+		return false
+	}
+	switch task.Status.Phase {
+	case "Running", "Failed", "Completed", v1alpha1.PhaseTerminating:
+		return true
+	}
+	return false
 }
 
 // --- Gateways ---

@@ -203,8 +203,11 @@ func TestRemoteExitCleanupMechanic(t *testing.T) {
 // parser the trailing "--server" was silently swallowed and "--context=prod"
 // was consumed as the CLI's own kube context.
 func TestParseGlobalArgsDashDashPassthrough(t *testing.T) {
-	cmd, cleanArgs, _, explicitServer, kubeContext, _ := parseGlobalArgs(
+	cmd, cleanArgs, _, explicitServer, kubeContext, _, err := parseGlobalArgs(
 		[]string{"ssh", "mytask", "--", "env", "--server"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if cmd != "ssh" {
 		t.Fatalf("cmd = %q, want ssh", cmd)
 	}
@@ -216,8 +219,12 @@ func TestParseGlobalArgsDashDashPassthrough(t *testing.T) {
 		t.Fatalf("cleanArgs = %q, want %q", cleanArgs, want)
 	}
 
-	_, cleanArgs, _, _, kubeContext, _ = parseGlobalArgs(
+	var err2 error
+	_, cleanArgs, _, _, kubeContext, _, err2 = parseGlobalArgs(
 		[]string{"ssh", "mytask", "--", "echo", "--context=prod"})
+	if err2 != nil {
+		t.Fatalf("unexpected error: %v", err2)
+	}
 	if kubeContext != "" {
 		t.Fatalf("kubeContext = %q, want empty (flag belongs to the remote command)", kubeContext)
 	}
@@ -229,8 +236,11 @@ func TestParseGlobalArgsDashDashPassthrough(t *testing.T) {
 
 // Global flags before the command still parse as before.
 func TestParseGlobalArgsFlagsBeforeCommand(t *testing.T) {
-	cmd, cleanArgs, atespace, explicitServer, kubeContext, axNamespace := parseGlobalArgs(
+	cmd, cleanArgs, atespace, explicitServer, kubeContext, axNamespace, err := parseGlobalArgs(
 		[]string{"--server=http://x:1", "--context", "prod", "get", "tasks"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if cmd != "get" || explicitServer != "http://x:1" || kubeContext != "prod" {
 		t.Fatalf("got cmd=%q server=%q context=%q", cmd, explicitServer, kubeContext)
 	}
@@ -286,5 +296,31 @@ func TestParseSuspendResumeName(t *testing.T) {
 		if name, err := parseSuspendResumeName("resume", args); err == nil {
 			t.Errorf("parseSuspendResumeName(resume, %q) = %q, nil; want usage error", args, name)
 		}
+	}
+}
+
+// A value-taking global flag as the last word silently keeps its default
+// today: `ax get tasks --server` swallows the flag and the CLI tunnels to
+// kube instead of failing. A trailing valueless flag must be an error. The
+// `=value` forms and the post-`--` passthrough are unaffected.
+func TestParseGlobalArgsTrailingFlagNeedsValue(t *testing.T) {
+	for _, flag := range []string{"-a", "--atespace", "--server", "--context", "-n", "--namespace"} {
+		_, _, _, _, _, _, err := parseGlobalArgs([]string{"get", "tasks", flag})
+		if err == nil {
+			t.Errorf("parseGlobalArgs(..., %q) = nil error, want missing-value error", flag)
+		}
+	}
+
+	// =value forms still parse; post--- words stay positional.
+	_, _, atespace, _, _, _, err := parseGlobalArgs([]string{"get", "tasks", "--atespace=prod"})
+	if err != nil || atespace != "prod" {
+		t.Errorf("=value form broke: atespace=%q err=%v", atespace, err)
+	}
+	_, cleanArgs, _, _, _, _, err := parseGlobalArgs([]string{"ssh", "mytask", "--", "--server"})
+	if err != nil {
+		t.Errorf("post--- passthrough broke: err=%v", err)
+	}
+	if len(cleanArgs) != 3 || cleanArgs[2] != "--server" {
+		t.Errorf("cleanArgs = %q, want [mytask -- --server]", cleanArgs)
 	}
 }

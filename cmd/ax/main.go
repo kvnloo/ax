@@ -45,7 +45,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	cmd, cleanArgs, atespace, explicitServer, kubeContext, axNamespace := parseGlobalArgs(os.Args[1:])
+	cmd, cleanArgs, atespace, explicitServer, kubeContext, axNamespace, parseErr := parseGlobalArgs(os.Args[1:])
+	if parseErr != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", parseErr)
+		os.Exit(1)
+	}
 
 	if cmd == "" {
 		printUsage()
@@ -120,7 +124,7 @@ func main() {
 // positional, even if it looks like a global flag, so the remote command in
 // `ax ssh mytask -- env --server` reaches the guest intact instead of being
 // swallowed by the global parser.
-func parseGlobalArgs(args []string) (cmd string, cleanArgs []string, atespace, explicitServer, kubeContext, axNamespace string) {
+func parseGlobalArgs(args []string) (cmd string, cleanArgs []string, atespace, explicitServer, kubeContext, axNamespace string, err error) {
 	atespace = "default"
 	axNamespace = "ax-system"
 	noMoreFlags := false
@@ -139,6 +143,9 @@ func parseGlobalArgs(args []string) (cmd string, cleanArgs []string, atespace, e
 			if i+1 < len(args) {
 				atespace = args[i+1]
 				i++
+			} else {
+				err = fmt.Errorf("flag %s requires a value", arg)
+				return
 			}
 		} else if strings.HasPrefix(arg, "--atespace=") {
 			atespace = strings.TrimPrefix(arg, "--atespace=")
@@ -146,6 +153,9 @@ func parseGlobalArgs(args []string) (cmd string, cleanArgs []string, atespace, e
 			if i+1 < len(args) {
 				explicitServer = args[i+1]
 				i++
+			} else {
+				err = fmt.Errorf("flag %s requires a value", arg)
+				return
 			}
 		} else if strings.HasPrefix(arg, "--server=") {
 			explicitServer = strings.TrimPrefix(arg, "--server=")
@@ -153,6 +163,9 @@ func parseGlobalArgs(args []string) (cmd string, cleanArgs []string, atespace, e
 			if i+1 < len(args) {
 				kubeContext = args[i+1]
 				i++
+			} else {
+				err = fmt.Errorf("flag %s requires a value", arg)
+				return
 			}
 		} else if strings.HasPrefix(arg, "--context=") {
 			kubeContext = strings.TrimPrefix(arg, "--context=")
@@ -160,6 +173,9 @@ func parseGlobalArgs(args []string) (cmd string, cleanArgs []string, atespace, e
 			if i+1 < len(args) {
 				axNamespace = args[i+1]
 				i++
+			} else {
+				err = fmt.Errorf("flag %s requires a value", arg)
+				return
 			}
 		} else if strings.HasPrefix(arg, "--namespace=") {
 			axNamespace = strings.TrimPrefix(arg, "--namespace=")
@@ -169,7 +185,7 @@ func parseGlobalArgs(args []string) (cmd string, cleanArgs []string, atespace, e
 			cleanArgs = append(cleanArgs, arg)
 		}
 	}
-	return cmd, cleanArgs, atespace, explicitServer, kubeContext, axNamespace
+	return
 }
 
 func printUsage() {

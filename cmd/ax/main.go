@@ -22,9 +22,11 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/signal"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -1293,6 +1295,43 @@ func runTunnel(args []string) error {
 	}
 }
 
+// exitCodeForSignal maps an interrupt signal to the conventional shell exit
+// code (128 + signal number).
+func exitCodeForSignal(sig os.Signal) int {
+	if sig == syscall.SIGTERM {
+		return 128 + 15
+	}
+	return 128 + 2 // SIGINT and anything else interrupt-like
+}
+
+// watchSSHInterrupt installs a SIGINT/SIGTERM handler that releases the ssh
+// session before the process dies. Go's default signal behavior kills the
+// process without running deferred calls, so a Ctrl-C during `ax ssh` left
+// the kubectl port-forward orphaned: its state entry kept claiming an active
+// tunnel and the next command adopted a stale port-forward. The returned stop
+// func unregisters the handler; exitFn is os.Exit in production and a stub in
+// tests.
+func watchSSHInterrupt(release func(), exitFn func(int)) (stop func()) {
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case sig := <-sigs:
+			signal.Stop(sigs)
+			if release != nil {
+				release()
+			}
+			exitFn(exitCodeForSignal(sig))
+		case <-done:
+		}
+	}()
+	return func() {
+		signal.Stop(sigs)
+		close(done)
+	}
+}
+
 // releaseSSHSession releases the resources held by an ssh session: the
 // ephemeral atenet-router port-forward (nil on the direct-reachability path)
 // and the gRPC connections. The non-zero remote exit path calls os.Exit,
@@ -1487,6 +1526,14 @@ func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 		defer cleanup()
 	}
 	defer guestClient.Close()
+
+	// A Ctrl-C here must not orphan the atenet-router port-forward: the
+	// default signal death skips every deferred cleanup above. Release the
+	// session explicitly on interrupt and exit with the conventional code.
+	stopInterruptWatch := watchSSHInterrupt(func() {
+		releaseSSHSession(cleanup, guestClient.Close, conn.Close)
+	}, os.Exit)
+	defer stopInterruptWatch()
 
 	exitCode, err := guestClient.Exec(context.Background(), guest.ExecOptions{
 		Command: cmdToRun,

@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/google/ax/internal/guest"
 	"github.com/google/ax/internal/tunnel"
@@ -632,8 +633,10 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 			name := ""
 			tAtespace := ""
 			if t.Metadata != nil {
-				name = t.Metadata.Name
-				tAtespace = t.Metadata.Atespace
+				// Names carry no control-character validation server-side;
+				// sanitize so a crafted name cannot break the table.
+				name = sanitizeCell(t.Metadata.Name)
+				tAtespace = sanitizeCell(t.Metadata.Atespace)
 				if t.Metadata.CreationTimestamp != nil {
 					age = formatAge(time.Since(t.Metadata.CreationTimestamp.AsTime()))
 				}
@@ -698,8 +701,8 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 			name := ""
 			gwAtespace := ""
 			if g.Metadata != nil {
-				name = g.Metadata.Name
-				gwAtespace = g.Metadata.Atespace
+				name = sanitizeCell(g.Metadata.Name)
+				gwAtespace = sanitizeCell(g.Metadata.Atespace)
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
 				name,
@@ -747,8 +750,8 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 			name := ""
 			wsAtespace := ""
 			if ws.Metadata != nil {
-				name = ws.Metadata.Name
-				wsAtespace = ws.Metadata.Atespace
+				name = sanitizeCell(ws.Metadata.Name)
+				wsAtespace = sanitizeCell(ws.Metadata.Atespace)
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
 				name,
@@ -788,14 +791,14 @@ func runGetWithClient(ctx context.Context, client v1alpha1.AXClient, atespace st
 			name := ""
 			mAtespace := ""
 			if m.Metadata != nil {
-				name = m.Metadata.Name
-				mAtespace = m.Metadata.Atespace
+				name = sanitizeCell(m.Metadata.Name)
+				mAtespace = sanitizeCell(m.Metadata.Atespace)
 			}
 			provider := ""
 			modelName := ""
 			if m.Spec != nil {
-				provider = m.Spec.Provider
-				modelName = m.Spec.Model
+				provider = sanitizeCell(m.Spec.Provider)
+				modelName = sanitizeCell(m.Spec.Model)
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
 				name,
@@ -1851,6 +1854,20 @@ func displayPhase(phase string) string {
 		return p
 	}
 	return "Pending"
+}
+
+// sanitizeCell renders a value for a tabwriter table cell: control
+// characters (newline, tab, etc.) would split the row or shift the
+// columns, so they render as spaces. Object names reach the server
+// without control-character validation, so the list views must not
+// trust them blindly.
+func sanitizeCell(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // displayActor renders a task actor for CLI display: whitespace-only counts

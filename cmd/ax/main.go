@@ -1070,7 +1070,10 @@ func runWatch(serverURL, atespace string, args []string) error {
 		return fmt.Errorf("watching task: %w", err)
 	}
 
-	fmt.Printf("Watching task %s/%s...\n", atespace, name)
+	// The banner is a diagnostic, not event data: it goes to stderr so the
+	// event stream on stdout stays clean for piping, matching delete's
+	// "waiting for ... to be deleted..." progress line.
+	fmt.Fprintf(os.Stderr, "Watching task %s/%s...\n", atespace, name)
 
 	return watchStreamLoop(stream, os.Stdout, atespace, name)
 }

@@ -831,6 +831,9 @@ func runWatch(serverURL, atespace string, args []string) error {
 	if kind != v1alpha1.KindTask {
 		return fmt.Errorf("usage: ax watch task <name> (got kind %q)", args[0])
 	}
+	if len(args) > 2 {
+		return fmt.Errorf("usage: ax watch task <name> (unexpected extra argument %q)", args[2])
+	}
 	name := args[1]
 
 	client, conn, err := getAXClient(serverURL)

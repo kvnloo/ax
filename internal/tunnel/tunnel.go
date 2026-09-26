@@ -508,9 +508,24 @@ func spawnTunnel(ctxName, dir string, opts Options) (string, error) {
 		PID:       cmd.Process.Pid,
 		CreatedAt: time.Now(),
 	}
-	_ = SaveTunnel(info)
+	if err := recordTunnelOrCleanup(info, cmd); err != nil {
+		return "", err
+	}
 
 	return fmt.Sprintf("http://127.0.0.1:%d", localPort), nil
+}
+
+// recordTunnelOrCleanup persists the tunnel state. If recording fails the
+// tunnel is torn down instead of being left running with no state file: an
+// untracked port-forward is invisible to `ax tunnel list`, unreachable by
+// `ax tunnel stop`, and the next command spawns a second tunnel on top of
+// it — the orphan scenario atomic SaveTunnel guards against.
+func recordTunnelOrCleanup(info *TunnelInfo, cmd *exec.Cmd) error {
+	if err := SaveTunnel(info); err != nil {
+		killAndReapChild(cmd)
+		return fmt.Errorf("recording tunnel state: %w", err)
+	}
+	return nil
 }
 
 // PortForward starts an ephemeral port-forward to a Kubernetes resource (e.g. pod/name or svc/name)

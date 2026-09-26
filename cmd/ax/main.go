@@ -893,16 +893,27 @@ func runDescribe(serverURL, atespace string, args []string) error {
 	}
 
 	if len(conditions) > 0 {
-		fmt.Println("\nConditions:")
-		w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
-		fmt.Fprintln(w, "  TYPE\tSTATUS\tREASON\tMESSAGE")
-		for _, c := range conditions {
-			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", c.Type, c.Status, c.Reason, c.Message)
-		}
-		_ = w.Flush()
+		writeConditions(os.Stdout, conditions)
 	}
 
 	return nil
+}
+
+// writeConditions renders the Conditions section of `ax describe task`. The
+// header has no leading blank line, matching every other describe section
+// (Name/Workspaces/Image/Command print back-to-back); the stray blank line
+// made Conditions look detached from the task it belongs to.
+func writeConditions(w io.Writer, conditions []*v1alpha1.Condition) {
+	if len(conditions) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "Conditions:")
+	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
+	fmt.Fprintln(tw, "  TYPE\tSTATUS\tREASON\tMESSAGE")
+	for _, c := range conditions {
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", c.Type, c.Status, c.Reason, c.Message)
+	}
+	_ = tw.Flush()
 }
 
 func runWatch(serverURL, atespace string, args []string) error {

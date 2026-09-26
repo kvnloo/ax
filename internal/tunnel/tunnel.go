@@ -357,6 +357,27 @@ func EnsureServerURL(opts Options) (string, error) {
 	return serverURL, nil
 }
 
+// killAndReapChild kills cmd's process (best effort) and reaps it. An
+// unreaped child stays a zombie in this process until the CLI exits, which
+// matters for long-lived sessions (interactive ssh, watch) that spawn and
+// discard port-forwards repeatedly.
+func killAndReapChild(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+}
+
+// detachReap starts a goroutine that reaps cmd when it exits. Use for
+// intentionally long-lived children: the tunnel port-forward outlives
+// spawnTunnel, and StopTunnel can only signal it by PID (never Wait on it),
+// so without this the child would linger as a zombie for the rest of the
+// CLI's lifetime after being stopped.
+func detachReap(cmd *exec.Cmd) {
+	go func() { _ = cmd.Wait() }()
+}
+
 // spawnTunnel starts a background kubectl port-forward for ctxName, waits for
 // the local port assignment and a passing health check, records the tunnel
 // state, and returns the server URL. Callers must hold the tunnel lock (see
@@ -387,6 +408,12 @@ func spawnTunnel(ctxName, dir string, opts Options) (string, error) {
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("spawning kubectl port-forward for context %q: %w", ctxName, err)
 	}
+	// Detached reap: the port-forward is meant to outlive this function, and
+	// StopTunnel can only signal it by PID. Without this Wait the child would
+	// linger as a zombie for the rest of the CLI's lifetime after being
+	// stopped. A second Wait racing this one on the error paths below is
+	// harmless: exactly one of them reaps, the other gets an ignored error.
+	detachReap(cmd)
 
 	// Wait for port assignment from log output
 	localPort := 0
@@ -413,7 +440,7 @@ func spawnTunnel(ctxName, dir string, opts Options) (string, error) {
 	}
 
 	if localPort == 0 {
-		_ = cmd.Process.Kill()
+		killAndReapChild(cmd)
 		logData, _ := os.ReadFile(logPath)
 		return "", fmt.Errorf("timeout waiting for kubectl port-forward on context %q: %s", ctxName, strings.TrimSpace(string(logData)))
 	}
@@ -430,7 +457,7 @@ func spawnTunnel(ctxName, dir string, opts Options) (string, error) {
 	}
 
 	if !healthy {
-		_ = cmd.Process.Kill()
+		killAndReapChild(cmd)
 		return "", fmt.Errorf("tunnel started on port %d but health check failed for context %q", localPort, ctxName)
 	}
 
@@ -491,6 +518,9 @@ func PortForward(ctx context.Context, kubeContext, namespace, targetResource str
 		if cmd.Process != nil {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 			_ = cmd.Process.Kill()
+			// Reap the child: without Wait it would linger as a zombie
+			// until the CLI exits.
+			_ = cmd.Wait()
 		}
 	}
 

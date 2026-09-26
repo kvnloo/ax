@@ -24,6 +24,7 @@ import (
 
 	ateenvv1alpha "github.com/agent-substrate/env/proto/ateenv/v1alpha"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
@@ -78,6 +79,29 @@ func (c *Client) Close() error {
 		return c.grpcConn.Close()
 	}
 	return nil
+}
+
+// WaitReady blocks until the underlying gRPC connection reaches READY or ctx
+// expires. gRPC dials lazily, so without this the first real RPC on the
+// direct ssh path is the Exec — and a half-open direct path (TCP accepted, no
+// gRPC server: stale worker IP, intercepting middlebox) would surface only
+// there, after the atenet-router fallback was already skipped. Callers must
+// run this before any command starts: falling back at this point cannot
+// double-execute a side-effecting command.
+func (c *Client) WaitReady(ctx context.Context) error {
+	if c.grpcConn == nil {
+		return errors.New("guest: no connection")
+	}
+	c.grpcConn.Connect()
+	for {
+		st := c.grpcConn.GetState()
+		if st == connectivity.Ready {
+			return nil
+		}
+		if !c.grpcConn.WaitForStateChange(ctx, st) {
+			return fmt.Errorf("guest: connection not ready: %w", ctx.Err())
+		}
+	}
 }
 
 // ExecOptions holds parameters for running a command in the task actor.

@@ -1251,13 +1251,29 @@ func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 	// 1. First, check if worker IP is directly reachable (e.g. within cluster or local mesh)
 	d := net.Dialer{Timeout: 500 * time.Millisecond}
 	guestEndpoint := net.JoinHostPort(host, fmt.Sprint(port))
+	directOK := false
 	if testConn, dialErr := d.Dial("tcp", guestEndpoint); dialErr == nil {
 		_ = testConn.Close()
 		guestClient, err = guest.Dial(guestEndpoint)
 		if err != nil {
 			return fmt.Errorf("connecting to guest at %s: %w", guestEndpoint, err)
 		}
-	} else {
+		// The gRPC dial above is lazy: verify the direct path actually
+		// speaks gRPC before committing to it. A half-open path (TCP
+		// accepted, no gRPC server — stale worker IP, intercepting
+		// middlebox) must fall back to the atenet-router instead of
+		// failing at Exec with no fallback left.
+		readyCtx, readyCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		readyErr := guestClient.WaitReady(readyCtx)
+		readyCancel()
+		if readyErr == nil {
+			directOK = true
+		} else {
+			_ = guestClient.Close()
+			guestClient = nil
+		}
+	}
+	if !directOK {
 		// 2. Connect via the Substrate atenet-router service in ate-system (port 80)
 		localPort, pfCleanup, err := tunnel.PortForward(context.Background(), kubeContext, "ate-system", "svc/atenet-router", 80)
 		if err != nil {

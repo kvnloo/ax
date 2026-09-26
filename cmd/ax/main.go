@@ -227,7 +227,20 @@ Flags:
   --server string             AX API server address (default: auto-detected from kube context or $AX_SERVER)`)
 }
 
+// normalizeServerURL trims accidental whitespace and trailing slashes from
+// a --server value or AX_SERVER export (copy-paste leaves "http://host:8080/"
+// behind). A trailing slash makes the gRPC target unresolvable and surfaces
+// as a confusing DNS error instead of a clean dial.
+func normalizeServerURL(serverURL string) string {
+	s := strings.TrimSpace(serverURL)
+	for len(s) > 0 && strings.HasSuffix(s, "/") {
+		s = strings.TrimSuffix(s, "/")
+	}
+	return s
+}
+
 func getAXClient(serverURL string) (v1alpha1.AXClient, *grpc.ClientConn, error) {
+	serverURL = normalizeServerURL(serverURL)
 	target := strings.TrimPrefix(serverURL, "http://")
 	target = strings.TrimPrefix(target, "https://")
 	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))

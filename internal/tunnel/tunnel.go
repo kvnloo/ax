@@ -299,10 +299,10 @@ func IsTunnelActive(info *TunnelInfo) bool {
 // and establishes/reuses a background port-forward tunnel to svc/ax-server.
 func EnsureServerURL(opts Options) (string, error) {
 	if opts.ServerURL != "" {
-		return opts.ServerURL, nil
+		return normalizeServerURL(opts.ServerURL), nil
 	}
 	if env := os.Getenv("AX_SERVER"); env != "" {
-		return env, nil
+		return normalizeServerURL(env), nil
 	}
 
 	ctxName, err := CurrentContext(opts.Context)
@@ -637,4 +637,15 @@ func scanPortForwardOutput(r io.Reader, portChan chan<- int, errChan chan<- erro
 			return
 		}
 	}
+}
+
+// normalizeServerURL trims accidental whitespace and trailing slashes from a
+// server URL (copy-paste leaves "http://host:8080/" behind), which would
+// otherwise make the gRPC dial target unresolvable.
+func normalizeServerURL(serverURL string) string {
+	s := strings.TrimSpace(serverURL)
+	for len(s) > 0 && strings.HasSuffix(s, "/") {
+		s = strings.TrimSuffix(s, "/")
+	}
+	return s
 }

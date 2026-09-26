@@ -258,7 +258,10 @@ func ValidateTask(t *Task) error {
 	seen := make(map[string]string, len(refs))
 	for i, r := range refs {
 		field := fmt.Sprintf("spec.workspaces[%d]", i)
-		if r.GetName() == "" {
+		// A whitespace-only name is the same as no name: it passed the
+		// == "" check and would mount the workspace at
+		// DefaultWorkspacePath/" " in the runner.
+		if strings.TrimSpace(r.GetName()) == "" {
 			return fmt.Errorf("%s: name is required", field)
 		}
 		if names[r.GetName()] {

@@ -417,6 +417,11 @@ func TestValidateTask(t *testing.T) {
 			spec:    &v1alpha1.TaskSpec{Workspaces: []*v1alpha1.WorkspaceRef{{Path: "/w"}}},
 			wantErr: "spec.workspaces[0]: name is required",
 		},
+		{
+			name:    "whitespace-only name",
+			spec:    &v1alpha1.TaskSpec{Workspaces: []*v1alpha1.WorkspaceRef{{Name: " "}}},
+			wantErr: "spec.workspaces[0]: name is required",
+		},
 		{name: "list default paths", spec: &v1alpha1.TaskSpec{Workspaces: []*v1alpha1.WorkspaceRef{{Name: "a"}, {Name: "b"}}}},
 		{name: "list explicit paths", spec: &v1alpha1.TaskSpec{Workspaces: []*v1alpha1.WorkspaceRef{{Name: "a", Path: "/x"}, {Name: "b", Path: "/y"}}}},
 		{

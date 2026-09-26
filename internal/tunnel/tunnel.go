@@ -297,11 +297,16 @@ func IsTunnelActive(info *TunnelInfo) bool {
 // If ServerURL or AX_SERVER is explicitly set, it returns that.
 // Otherwise, it checks the active Kubernetes context (or opts.Context)
 // and establishes/reuses a background port-forward tunnel to svc/ax-server.
+//
+// A whitespace-only ServerURL/AX_SERVER counts as unset: normalizeServerURL
+// would trim it to "", and the CLI would dial an empty target instead of
+// auto-detecting from the kube context (copy-paste leaves " " behind the
+// same way it leaves trailing slashes).
 func EnsureServerURL(opts Options) (string, error) {
-	if opts.ServerURL != "" {
+	if strings.TrimSpace(opts.ServerURL) != "" {
 		return normalizeServerURL(opts.ServerURL), nil
 	}
-	if env := os.Getenv("AX_SERVER"); env != "" {
+	if env := os.Getenv("AX_SERVER"); strings.TrimSpace(env) != "" {
 		return normalizeServerURL(env), nil
 	}
 

@@ -74,7 +74,7 @@ spec: {}
 // is the second real document.
 func TestApplyManifestsEmptyDocIndex(t *testing.T) {
 	fc := &fakeAXClient{getTaskErr: status.Error(codes.NotFound, "no such task")}
-	err := applyManifests(context.Background(), fc, []byte(multiDocManifest))
+	err := applyManifests(context.Background(), fc, []byte(multiDocManifest), "default", false)
 	if err == nil {
 		t.Fatal("expected an error from the unsupported-kind document, got nil")
 	}
@@ -105,7 +105,7 @@ metadata:
 spec: {}
 `
 	fc := &fakeAXClient{getTaskErr: status.Error(codes.NotFound, "no such task")}
-	if err := applyManifests(context.Background(), fc, []byte(manifest)); err != nil {
+	if err := applyManifests(context.Background(), fc, []byte(manifest), "default", false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(fc.updatedTasks) != 2 {
@@ -132,7 +132,7 @@ spec: {}
 ---
 `
 	fc := &fakeAXClient{getTaskErr: status.Error(codes.NotFound, "no such task")}
-	if err := applyManifests(context.Background(), fc, []byte(manifest)); err != nil {
+	if err := applyManifests(context.Background(), fc, []byte(manifest), "default", false); err != nil {
 		t.Fatalf("blank separators must not fail the apply, got: %v", err)
 	}
 	if len(fc.updatedTasks) != 2 {
@@ -208,7 +208,7 @@ func TestRemoteExitCleanupMechanic(t *testing.T) {
 // parser the trailing "--server" was silently swallowed and "--context=prod"
 // was consumed as the CLI's own kube context.
 func TestParseGlobalArgsDashDashPassthrough(t *testing.T) {
-	cmd, cleanArgs, _, explicitServer, kubeContext, _, err := parseGlobalArgs(
+	cmd, cleanArgs, _, explicitServer, kubeContext, _, _, err := parseGlobalArgs(
 		[]string{"ssh", "mytask", "--", "env", "--server"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -225,7 +225,7 @@ func TestParseGlobalArgsDashDashPassthrough(t *testing.T) {
 	}
 
 	var err2 error
-	_, cleanArgs, _, _, kubeContext, _, err2 = parseGlobalArgs(
+	_, cleanArgs, _, _, kubeContext, _, _, err2 = parseGlobalArgs(
 		[]string{"ssh", "mytask", "--", "echo", "--context=prod"})
 	if err2 != nil {
 		t.Fatalf("unexpected error: %v", err2)
@@ -241,7 +241,7 @@ func TestParseGlobalArgsDashDashPassthrough(t *testing.T) {
 
 // Global flags before the command still parse as before.
 func TestParseGlobalArgsFlagsBeforeCommand(t *testing.T) {
-	cmd, cleanArgs, atespace, explicitServer, kubeContext, axNamespace, err := parseGlobalArgs(
+	cmd, cleanArgs, atespace, explicitServer, kubeContext, axNamespace, _, err := parseGlobalArgs(
 		[]string{"--server=http://x:1", "--context", "prod", "get", "tasks"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -346,7 +346,7 @@ func TestRunApplyExtraPositionalRejectedBeforeDial(t *testing.T) {
 	if err := os.WriteFile(f, []byte(manifest), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := runApply("http://127.0.0.1:1", []string{"-f", f, "extra"})
+	err := runApply("http://127.0.0.1:1", "default", false, []string{"-f", f, "extra"})
 	if err == nil || !strings.Contains(err.Error(), `unexpected extra argument "extra"`) {
 		t.Fatalf("runApply = %v, want unexpected extra argument", err)
 	}
@@ -358,18 +358,18 @@ func TestRunApplyExtraPositionalRejectedBeforeDial(t *testing.T) {
 // `=value` forms and the post-`--` passthrough are unaffected.
 func TestParseGlobalArgsTrailingFlagNeedsValue(t *testing.T) {
 	for _, flag := range []string{"-a", "--atespace", "--server", "--context", "-n", "--namespace"} {
-		_, _, _, _, _, _, err := parseGlobalArgs([]string{"get", "tasks", flag})
+		_, _, _, _, _, _, _, err := parseGlobalArgs([]string{"get", "tasks", flag})
 		if err == nil {
 			t.Errorf("parseGlobalArgs(..., %q) = nil error, want missing-value error", flag)
 		}
 	}
 
 	// =value forms still parse; post--- words stay positional.
-	_, _, atespace, _, _, _, err := parseGlobalArgs([]string{"get", "tasks", "--atespace=prod"})
+	_, _, atespace, _, _, _, _, err := parseGlobalArgs([]string{"get", "tasks", "--atespace=prod"})
 	if err != nil || atespace != "prod" {
 		t.Errorf("=value form broke: atespace=%q err=%v", atespace, err)
 	}
-	_, cleanArgs, _, _, _, _, err := parseGlobalArgs([]string{"ssh", "mytask", "--", "--server"})
+	_, cleanArgs, _, _, _, _, _, err := parseGlobalArgs([]string{"ssh", "mytask", "--", "--server"})
 	if err != nil {
 		t.Errorf("post--- passthrough broke: err=%v", err)
 	}

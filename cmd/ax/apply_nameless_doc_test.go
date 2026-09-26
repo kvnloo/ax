@@ -38,7 +38,7 @@ func applyNamelessDoc(t *testing.T, client v1alpha1.AXClient, manifest string) (
 	if err := dec.Decode(&doc); err != nil {
 		t.Fatalf("decoding test manifest: %v", err)
 	}
-	return applyDocument(context.Background(), client, &doc)
+	return applyDocument(context.Background(), client, &doc, "default", false)
 }
 
 // A manifest document without metadata.name used to dial the server and

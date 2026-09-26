@@ -47,7 +47,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	cmd, cleanArgs, atespace, explicitServer, kubeContext, axNamespace, parseErr := parseGlobalArgs(os.Args[1:])
+	cmd, cleanArgs, atespace, explicitServer, kubeContext, axNamespace, atespaceExplicit, parseErr := parseGlobalArgs(os.Args[1:])
 	if parseErr != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", parseErr)
 		os.Exit(1)
@@ -93,7 +93,7 @@ func main() {
 
 	switch cmd {
 	case "apply":
-		err = runApply(serverURL, cleanArgs)
+		err = runApply(serverURL, atespace, atespaceExplicit, cleanArgs)
 	case "get":
 		err = runGet(serverURL, atespace, cleanArgs)
 	case "describe":
@@ -126,7 +126,7 @@ func main() {
 // positional, even if it looks like a global flag, so the remote command in
 // `ax ssh mytask -- env --server` reaches the guest intact instead of being
 // swallowed by the global parser.
-func parseGlobalArgs(args []string) (cmd string, cleanArgs []string, atespace, explicitServer, kubeContext, axNamespace string, err error) {
+func parseGlobalArgs(args []string) (cmd string, cleanArgs []string, atespace, explicitServer, kubeContext, axNamespace string, atespaceExplicit bool, err error) {
 	atespace = "default"
 	axNamespace = "ax-system"
 	noMoreFlags := false
@@ -144,6 +144,7 @@ func parseGlobalArgs(args []string) (cmd string, cleanArgs []string, atespace, e
 		if arg == "-a" || arg == "--atespace" {
 			if i+1 < len(args) {
 				atespace = args[i+1]
+				atespaceExplicit = true
 				i++
 			} else {
 				err = fmt.Errorf("flag %s requires a value", arg)
@@ -151,6 +152,7 @@ func parseGlobalArgs(args []string) (cmd string, cleanArgs []string, atespace, e
 			}
 		} else if strings.HasPrefix(arg, "--atespace=") {
 			atespace = strings.TrimPrefix(arg, "--atespace=")
+			atespaceExplicit = true
 		} else if arg == "--server" {
 			if i+1 < len(args) {
 				explicitServer = args[i+1]
@@ -252,7 +254,7 @@ func getAXClient(serverURL string) (v1alpha1.AXClient, *grpc.ClientConn, error) 
 	return v1alpha1.NewAXClient(conn), conn, nil
 }
 
-func runApply(serverURL string, args []string) error {
+func runApply(serverURL, atespace string, atespaceExplicit bool, args []string) error {
 	data, ok, err := manifestFromArgs(args)
 	if err != nil {
 		return err
@@ -279,7 +281,7 @@ func runApply(serverURL string, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	return applyManifests(ctx, client, data)
+	return applyManifests(ctx, client, data, atespace, atespaceExplicit)
 }
 
 // validateApplyPositionals rejects stray positional args for `ax apply`:
@@ -304,7 +306,10 @@ func validateApplyPositionals(args []string) error {
 // documents: empty documents (a stray "---") do not shift the numbering.
 // A failure in one document aborts the apply and names the failing document;
 // documents applied before the failure are already reported.
-func applyManifests(ctx context.Context, client v1alpha1.AXClient, data []byte) error {
+// atespace/atespaceExplicit are the CLI --atespace flag and whether the user
+// passed it: an explicit flag wins over the manifest's metadata.atespace
+// (kubectl parity), otherwise the manifest's atespace stands.
+func applyManifests(ctx context.Context, client v1alpha1.AXClient, data []byte, atespace string, atespaceExplicit bool) error {
 	// Manifests are parsed here and submitted one resource at a time through the
 	// typed RPCs; the server never sees raw YAML.
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
@@ -325,7 +330,7 @@ func applyManifests(ctx context.Context, client v1alpha1.AXClient, data []byte) 
 		}
 		docIndex++
 
-		kind, name, outcome, err := applyDocument(ctx, client, &doc)
+		kind, name, outcome, err := applyDocument(ctx, client, &doc, atespace, atespaceExplicit)
 		if err != nil {
 			return fmt.Errorf("applying document %d: %w", docIndex, err)
 		}
@@ -355,11 +360,12 @@ func isEmptyDocument(doc *yaml.Node) bool {
 // applyDocument decodes one manifest by its kind and submits it with the matching
 // Update RPC. It reports the kind, the resource name, and whether the resource was
 // created, configured (spec changed), or unchanged, in the style of kubectl apply.
-func applyDocument(ctx context.Context, client v1alpha1.AXClient, doc *yaml.Node) (kind, name, outcome string, err error) {
+func applyDocument(ctx context.Context, client v1alpha1.AXClient, doc *yaml.Node, atespace string, atespaceExplicit bool) (kind, name, outcome string, err error) {
 	var head struct {
 		Kind     string `yaml:"kind"`
 		Metadata struct {
-			Name string `yaml:"name"`
+			Name     string `yaml:"name"`
+			Atespace string `yaml:"atespace"`
 		} `yaml:"metadata"`
 	}
 	if err := doc.Decode(&head); err != nil {
@@ -384,13 +390,25 @@ func applyDocument(ctx context.Context, client v1alpha1.AXClient, doc *yaml.Node
 		return "", "", "", fmt.Errorf("missing metadata.name")
 	}
 
+	// The atespace the document lands in. apply used to route purely on the
+	// manifest's metadata.atespace and never saw the CLI --atespace flag at
+	// all (main never passed it), so `ax apply --atespace=prod -f task.yaml`
+	// silently landed the task in the manifest's atespace (or "default").
+	// kubectl parity: an explicit --atespace wins, otherwise the manifest's
+	// own atespace stands, otherwise the server's "default" defaulting.
+	effAtespace := atespace
+	if !atespaceExplicit && head.Metadata.Atespace != "" {
+		effAtespace = head.Metadata.Atespace
+	}
+
 	switch kind {
 	case v1alpha1.KindTask:
 		var task v1alpha1.Task
 		if err := doc.Decode(&task); err != nil {
 			return "", "", "", err
 		}
-		existing, err := client.GetTask(ctx, &v1alpha1.GetTaskRequest{Atespace: task.GetMetadata().GetAtespace(), Name: task.GetMetadata().GetName()})
+		task.Metadata = applyDocMetadata(task.Metadata, effAtespace)
+		existing, err := client.GetTask(ctx, &v1alpha1.GetTaskRequest{Atespace: effAtespace, Name: task.GetMetadata().GetName()})
 		outcome, err := applyOutcome(err, existing.GetSpec(), task.GetSpec())
 		if err != nil {
 			return "", "", "", err
@@ -403,7 +421,8 @@ func applyDocument(ctx context.Context, client v1alpha1.AXClient, doc *yaml.Node
 		if err := doc.Decode(&gw); err != nil {
 			return "", "", "", err
 		}
-		existing, err := client.GetGateway(ctx, &v1alpha1.GetGatewayRequest{Atespace: gw.GetMetadata().GetAtespace(), Name: gw.GetMetadata().GetName()})
+		gw.Metadata = applyDocMetadata(gw.Metadata, effAtespace)
+		existing, err := client.GetGateway(ctx, &v1alpha1.GetGatewayRequest{Atespace: effAtespace, Name: gw.GetMetadata().GetName()})
 		outcome, err := applyOutcome(err, existing.GetSpec(), gw.GetSpec())
 		if err != nil {
 			return "", "", "", err
@@ -416,7 +435,8 @@ func applyDocument(ctx context.Context, client v1alpha1.AXClient, doc *yaml.Node
 		if err := doc.Decode(&ws); err != nil {
 			return "", "", "", err
 		}
-		existing, err := client.GetWorkspace(ctx, &v1alpha1.GetWorkspaceRequest{Atespace: ws.GetMetadata().GetAtespace(), Name: ws.GetMetadata().GetName()})
+		ws.Metadata = applyDocMetadata(ws.Metadata, effAtespace)
+		existing, err := client.GetWorkspace(ctx, &v1alpha1.GetWorkspaceRequest{Atespace: effAtespace, Name: ws.GetMetadata().GetName()})
 		outcome, err := applyOutcome(err, existing.GetSpec(), ws.GetSpec())
 		if err != nil {
 			return "", "", "", err
@@ -429,7 +449,8 @@ func applyDocument(ctx context.Context, client v1alpha1.AXClient, doc *yaml.Node
 		if err := doc.Decode(&m); err != nil {
 			return "", "", "", err
 		}
-		existing, err := client.GetModel(ctx, &v1alpha1.GetModelRequest{Atespace: m.GetMetadata().GetAtespace(), Name: m.GetMetadata().GetName()})
+		m.Metadata = applyDocMetadata(m.Metadata, effAtespace)
+		existing, err := client.GetModel(ctx, &v1alpha1.GetModelRequest{Atespace: effAtespace, Name: m.GetMetadata().GetName()})
 		outcome, err := applyOutcome(err, existing.GetSpec(), m.GetSpec())
 		if err != nil {
 			return "", "", "", err
@@ -442,6 +463,18 @@ func applyDocument(ctx context.Context, client v1alpha1.AXClient, doc *yaml.Node
 		// but the switch must stay exhaustive.
 		return "", "", "", fmt.Errorf("unsupported kind %q", head.Kind)
 	}
+}
+
+// applyDocMetadata pins a decoded manifest resource to its effective atespace
+// before any RPC: the existence lookup and the update must agree, and the
+// update must not carry a different atespace than the one the CLI flag (or
+// the manifest) selected.
+func applyDocMetadata(meta *v1alpha1.ObjectMeta, atespace string) *v1alpha1.ObjectMeta {
+	if meta == nil {
+		meta = &v1alpha1.ObjectMeta{}
+	}
+	meta.Atespace = atespace
+	return meta
 }
 
 // applyOutcome classifies an apply from the result of looking up the existing

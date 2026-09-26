@@ -36,7 +36,7 @@ func applyDoc(t *testing.T, client v1alpha1.AXClient, manifest string) (kind, na
 	if err := dec.Decode(&doc); err != nil {
 		t.Fatalf("decoding test manifest: %v", err)
 	}
-	return applyDocument(context.Background(), client, &doc)
+	return applyDocument(context.Background(), client, &doc, "default", false)
 }
 
 const applyTaskManifest = `

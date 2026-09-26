@@ -226,20 +226,34 @@ func runApply(serverURL string, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	return applyManifests(ctx, client, data)
+}
+
+// applyManifests applies each document of a multi-document manifest in order.
+// Document indexes in error messages are 1-based and count only real
+// documents: empty documents (a stray "---") do not shift the numbering.
+// A failure in one document aborts the apply and names the failing document;
+// documents applied before the failure are already reported.
+func applyManifests(ctx context.Context, client v1alpha1.AXClient, data []byte) error {
 	// Manifests are parsed here and submitted one resource at a time through the
 	// typed RPCs; the server never sees raw YAML.
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
-	for docIndex := 1; ; docIndex++ {
+	docIndex := 0
+	for {
 		var doc yaml.Node
 		if err := decoder.Decode(&doc); err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
-			return fmt.Errorf("decoding document %d: %w", docIndex, err)
+			return fmt.Errorf("decoding document %d: %w", docIndex+1, err)
 		}
 		if doc.Kind == 0 || (doc.Kind == yaml.DocumentNode && len(doc.Content) == 0) {
-			continue // empty document, e.g. a trailing "---"
+			continue // empty document, e.g. a trailing "---"; not counted
 		}
+		if isEmptyDocument(&doc) {
+			continue // bare "---" separator decodes to a null node, not an empty document
+		}
+		docIndex++
 
 		kind, name, outcome, err := applyDocument(ctx, client, &doc)
 		if err != nil {
@@ -247,6 +261,25 @@ func runApply(serverURL string, args []string) error {
 		}
 		fmt.Printf("%s.ax.io/%s %s\n", strings.ToLower(kind), name, outcome)
 	}
+}
+
+// isEmptyDocument reports whether a decoded YAML document carries no
+// content. A bare "---" separator between documents decodes to a document
+// node holding a single null scalar — not to an empty document node — so the
+// naive len(Content)==0 check misses it.
+func isEmptyDocument(doc *yaml.Node) bool {
+	if doc.Kind == 0 {
+		return true
+	}
+	if doc.Kind != yaml.DocumentNode {
+		return false
+	}
+	if len(doc.Content) == 0 {
+		return true
+	}
+	return len(doc.Content) == 1 &&
+		doc.Content[0].Kind == yaml.ScalarNode &&
+		doc.Content[0].Tag == "!!null"
 }
 
 // applyDocument decodes one manifest by its kind and submits it with the matching

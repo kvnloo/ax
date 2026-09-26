@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -32,6 +33,12 @@ const (
 	defaultStreamName    = "ax:stream:tasks"
 	defaultReadBatchSize = 10
 	defaultReadBlock     = 2 * time.Second
+	// defaultClaimMinIdle bounds how long a stream entry may sit
+	// unacknowledged in the consumer group's pending list before an idle
+	// subscriber reclaims it. It must exceed worst-case event processing
+	// (a ~15s workspace-ready poll plus Substrate round trips); a slow but
+	// live consumer is never stolen from below this idle age.
+	defaultClaimMinIdle = time.Minute
 )
 
 var (
@@ -50,6 +57,12 @@ type Options struct {
 	// ReadBlock is how long one XREADGROUP call waits for events before returning
 	// empty. Shorter values make shutdown more responsive at the cost of more calls.
 	ReadBlock time.Duration
+	// ClaimMinIdle is how long a stream entry may sit unacknowledged in the
+	// consumer group's pending list before an idle subscriber reclaims it
+	// via XAUTOCLAIM. It must exceed the worst-case event processing time;
+	// below it, a slow (not dead) consumer's in-flight event would be
+	// processed twice. Delivery is at-least-once either way.
+	ClaimMinIdle time.Duration
 }
 
 // Store is a Redis-backed implementation of store.Store.
@@ -71,6 +84,9 @@ func NewStore(client *redis.Client, opts Options) *Store {
 	}
 	if opts.ReadBlock <= 0 {
 		opts.ReadBlock = defaultReadBlock
+	}
+	if opts.ClaimMinIdle <= 0 {
+		opts.ClaimMinIdle = defaultClaimMinIdle
 	}
 	return &Store{
 		client: client,
@@ -738,7 +754,8 @@ func (s *Store) Subscribe(ctx context.Context, group, consumer string) (store.Su
 
 // subscription reads from a consumer group in batches and hands events out one
 // at a time. Delivery is at-least-once: an event stays in the group's pending
-// list until Ack is called for it.
+// list until Ack is called for it, and entries orphaned by a dead consumer are
+// reclaimed by idle subscribers after ClaimMinIdle.
 type subscription struct {
 	store    *Store
 	group    string
@@ -774,6 +791,17 @@ func (sub *subscription) read(ctx context.Context) ([]store.TaskEvent, error) {
 	}).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
+			// No new events: best-effort reclaim of entries a dead consumer
+			// claimed but never acknowledged before idling again. Failures
+			// are swallowed, not returned: this path just proved the
+			// connection healthy, so a failure here is almost certainly an
+			// old server without XAUTOCLAIM — returning an error would wedge
+			// the worker in a retry loop on every idle poll.
+			if claimed, err := sub.claimStale(ctx); err != nil {
+				slog.Warn("could not reclaim stale task events (continuing without reclaim)", "error", err)
+			} else {
+				return claimed, nil
+			}
 			return nil, nil
 		}
 		return nil, fmt.Errorf("reading task events: %w", err)
@@ -784,6 +812,38 @@ func (sub *subscription) read(ctx context.Context) ([]store.TaskEvent, error) {
 		for _, msg := range stream.Messages {
 			events = append(events, eventFromMessage(msg))
 		}
+	}
+	return events, nil
+}
+
+// claimStale reclaims pending entries idle longer than ClaimMinIdle — entries a
+// consumer claimed but never acknowledged before dying. XREADGROUP with ">"
+// never revisits the pending list, so without this a crash between delivery
+// and Ack loses the event permanently, and the Close comment's "remain
+// claimable" promise would be empty. Claiming resets an entry's idle timer,
+// so a slow-but-live consumer is not stolen from while it works.
+func (sub *subscription) claimStale(ctx context.Context) ([]store.TaskEvent, error) {
+	var events []store.TaskEvent
+	start := "0-0"
+	for {
+		claimed, next, err := sub.store.client.XAutoClaim(ctx, &redis.XAutoClaimArgs{
+			Stream:   sub.store.opts.StreamName,
+			Group:    sub.group,
+			Consumer: sub.consumer,
+			MinIdle:  sub.store.opts.ClaimMinIdle,
+			Start:    start,
+			Count:    sub.store.opts.ReadBatchSize,
+		}).Result()
+		if err != nil {
+			return nil, fmt.Errorf("claiming stale task events: %w", err)
+		}
+		for _, msg := range claimed {
+			events = append(events, eventFromMessage(msg))
+		}
+		if next == "0-0" {
+			break
+		}
+		start = next
 	}
 	return events, nil
 }

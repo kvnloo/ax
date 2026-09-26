@@ -394,6 +394,22 @@ func childExited(pid int) bool {
 	return err == nil && wpid == pid
 }
 
+// startPortForwardChild starts a child process writing its output to logFile
+// (nil discards it). Reaping stays the caller's job: callers that need the
+// premature-exit probe must NOT hand the child to detachReap until the probe
+// is done — a detached reaper racing childExited claims fast exits first and
+// blinds the probe (WNOHANG waitpid can only observe an unreaped child).
+func startPortForwardChild(name string, args []string, logFile *os.File) (*exec.Cmd, error) {
+	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return cmd, nil
+}
+
 // spawnTunnel starts a background kubectl port-forward for ctxName, waits for
 // the local port assignment and a passing health check, records the tunnel
 // state, and returns the server URL. Callers must hold the tunnel lock (see
@@ -416,20 +432,17 @@ func spawnTunnel(ctxName, dir string, opts Options) (string, error) {
 	}
 	kArgs = append(kArgs, "port-forward", "-n", opts.Namespace, targetRes, fmt.Sprintf(":%d", opts.Port))
 
-	cmd := exec.Command("kubectl", kArgs...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-
-	if err := cmd.Start(); err != nil {
+	cmd, err := startPortForwardChild("kubectl", kArgs, logFile)
+	if err != nil {
 		return "", fmt.Errorf("spawning kubectl port-forward for context %q: %w", ctxName, err)
 	}
-	// Detached reap: the port-forward is meant to outlive this function, and
-	// StopTunnel can only signal it by PID. Without this Wait the child would
-	// linger as a zombie for the rest of the CLI's lifetime after being
-	// stopped. A second Wait racing this one on the error paths below is
-	// harmless: exactly one of them reaps, the other gets an ignored error.
-	detachReap(cmd)
+	// NOTE: detachReap is intentionally NOT started here. The premature-exit
+	// probe below relies on childExited's WNOHANG waitpid; a detached reaper
+	// racing it would reap fast kubectl failures first and blind the probe,
+	// sending real errors down the 5s timeout path instead of failing fast.
+	// It starts only after the tunnel is healthy (below); every failure path
+	// between here and there reaps explicitly — via childExited itself on the
+	// fast-failure path, via killAndReapChild on the timeout/health paths.
 
 	// Wait for port assignment from log output
 	localPort := 0
@@ -479,6 +492,13 @@ func spawnTunnel(ctxName, dir string, opts Options) (string, error) {
 		killAndReapChild(cmd)
 		return "", fmt.Errorf("tunnel started on port %d but health check failed for context %q", localPort, ctxName)
 	}
+
+	// The tunnel is healthy: the port-forward is meant to outlive this
+	// function, and StopTunnel can only signal it by PID, so hand it to the
+	// detached reaper now that the premature-exit probe above is finished.
+	// Without this Wait the child would linger as a zombie for the rest of
+	// the CLI's lifetime after being stopped.
+	detachReap(cmd)
 
 	info := &TunnelInfo{
 		Context:   ctxName,

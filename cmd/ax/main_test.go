@@ -368,7 +368,11 @@ func TestSSHTargetActor(t *testing.T) {
 						t.Fatalf("sshTargetActor panicked: %v", r)
 					}
 				}()
-				got = sshTargetActor(tt.task)
+				var err error
+				got, err = sshTargetActor(tt.task)
+				if err != nil {
+					t.Fatalf("sshTargetActor: %v", err)
+				}
 			}()
 			if got != tt.want {
 				t.Errorf("sshTargetActor() = %q, want %q", got, tt.want)

@@ -1345,14 +1345,26 @@ func dialRouterGuest(kubeContext, targetActor string) (*guest.Client, func(), er
 // sshTargetActor builds the "atespace/actor" dial target for the guest
 // session. Task metadata is nil-checked: the server may return a task
 // without metadata, and dereferencing task.Metadata here panicked the CLI
-// after a successful GetTask. (Every other Metadata access in the CLI
-// nil-checks first; runSSH was the only one that didn't.)
-func sshTargetActor(task *v1alpha1.Task) string {
+// after a successful GetTask. An empty actor is an error: a Running task
+// should always have one, and dialing "atespace/" would fail deep inside
+// the router with an opaque error instead of naming the real problem.
+func sshTargetActor(task *v1alpha1.Task) (string, error) {
+	if task == nil || task.Status == nil || task.Status.Actor == "" {
+		return "", fmt.Errorf("task %q has no actor assigned", sshTaskName(task))
+	}
 	atespace := ""
 	if task.Metadata != nil {
 		atespace = task.Metadata.Atespace
 	}
-	return fmt.Sprintf("%s/%s", atespace, task.Status.Actor)
+	return fmt.Sprintf("%s/%s", atespace, task.Status.Actor), nil
+}
+
+// sshTaskName is the nil-safe task name for ssh error messages.
+func sshTaskName(task *v1alpha1.Task) string {
+	if task != nil && task.Metadata != nil {
+		return task.Metadata.Name
+	}
+	return ""
 }
 
 // parseSSHCommand extracts the remote command from the ssh args (everything
@@ -1427,7 +1439,10 @@ func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 		}
 	}
 
-	targetActor := sshTargetActor(task)
+	targetActor, err := sshTargetActor(task)
+	if err != nil {
+		return err
+	}
 	var (
 		guestClient *guest.Client
 		cleanup     func()

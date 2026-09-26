@@ -48,17 +48,25 @@ type MemoryStore struct {
 	workspaces map[string]*v1alpha1.Workspace
 	events     chan store.TaskEvent
 	watchers   map[string][]chan *v1alpha1.Task
+	// taskSaveSeq records the save order of each task (monotonic save
+	// sequence, newest save has the highest value). The Redis store re-adds
+	// the task to its sorted-set index on every SaveTask with
+	// score = save time, so the newest-save-first listing must reflect
+	// updates, not just creations.
+	taskSaveSeq map[string]uint64
+	saveSeq     uint64
 }
 
 // NewStore creates a new in-memory Store.
 func NewStore() *MemoryStore {
 	return &MemoryStore{
-		tasks:      make(map[string]*v1alpha1.Task),
-		gateways:   make(map[string]*v1alpha1.Gateway),
-		models:     make(map[string]*v1alpha1.Model),
-		workspaces: make(map[string]*v1alpha1.Workspace),
-		events:     make(chan store.TaskEvent, 1000),
-		watchers:   make(map[string][]chan *v1alpha1.Task),
+		tasks:       make(map[string]*v1alpha1.Task),
+		gateways:    make(map[string]*v1alpha1.Gateway),
+		models:      make(map[string]*v1alpha1.Model),
+		workspaces:  make(map[string]*v1alpha1.Workspace),
+		events:      make(chan store.TaskEvent, 1000),
+		watchers:    make(map[string][]chan *v1alpha1.Task),
+		taskSaveSeq: make(map[string]uint64),
 	}
 }
 
@@ -91,6 +99,10 @@ func (s *MemoryStore) SaveTask(ctx context.Context, task *v1alpha1.Task) error {
 	s.mu.Lock()
 	cp := clone(task)
 	s.tasks[key] = cp
+	// Track save order: the Redis index scores by save time, so every
+	// SaveTask (create or update) must bump the task in the listing.
+	s.saveSeq++
+	s.taskSaveSeq[key] = s.saveSeq
 
 	event := store.TaskEvent{
 		ID:       fmt.Sprintf("%d", time.Now().UnixNano()),
@@ -135,39 +147,47 @@ func (s *MemoryStore) ListTasks(ctx context.Context, atespace string, limit, off
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var result []*v1alpha1.Task
-	for _, t := range s.tasks {
+	type taskWithSeq struct {
+		task *v1alpha1.Task
+		seq  uint64
+	}
+	var result []taskWithSeq
+	for key, t := range s.tasks {
 		if atespace == "" || atespace == "*" || t.Metadata.Atespace == atespace {
 			cp := clone(t)
-			result = append(result, cp)
+			result = append(result, taskWithSeq{task: cp, seq: s.taskSaveSeq[key]})
 		}
 	}
 
 	// Limit/offset pagination assumes a stable order across calls, but Go
 	// map iteration is random: paging a fleet larger than one page saw
-	// duplicate rows and skipped rows. Sort newest-first like the Redis
-	// store (ZRevRange on the save-time index), tie-breaking on
-	// atespace/name so the order is fully deterministic.
+	// duplicate rows and skipped rows. Sort newest-save-first like the Redis
+	// store (ZRevRange on the save-time index, which re-scores on every
+	// SaveTask), tie-breaking on atespace/name so the order is fully
+	// deterministic even across store restarts.
 	sort.SliceStable(result, func(i, j int) bool {
-		ti := result[i].GetMetadata().GetCreationTimestamp().AsTime()
-		tj := result[j].GetMetadata().GetCreationTimestamp().AsTime()
-		if !ti.Equal(tj) {
-			return ti.After(tj)
+		if result[i].seq != result[j].seq {
+			return result[i].seq > result[j].seq
 		}
-		if ai, aj := result[i].GetMetadata().GetAtespace(), result[j].GetMetadata().GetAtespace(); ai != aj {
+		if ai, aj := result[i].task.GetMetadata().GetAtespace(), result[j].task.GetMetadata().GetAtespace(); ai != aj {
 			return ai < aj
 		}
-		return result[i].GetMetadata().GetName() < result[j].GetMetadata().GetName()
+		return result[i].task.GetMetadata().GetName() < result[j].task.GetMetadata().GetName()
 	})
 
-	if offset >= int64(len(result)) {
+	tasks := make([]*v1alpha1.Task, len(result))
+	for i, r := range result {
+		tasks[i] = r.task
+	}
+
+	if offset >= int64(len(tasks)) {
 		return []*v1alpha1.Task{}, nil
 	}
 	end := offset + limit
-	if limit <= 0 || end > int64(len(result)) {
-		end = int64(len(result))
+	if limit <= 0 || end > int64(len(tasks)) {
+		end = int64(len(tasks))
 	}
-	return result[offset:end], nil
+	return tasks[offset:end], nil
 }
 
 func (s *MemoryStore) UpdateTaskStatus(ctx context.Context, atespace, name string, status *v1alpha1.TaskStatus) error {
@@ -234,6 +254,7 @@ func (s *MemoryStore) DeleteTask(ctx context.Context, atespace, name string) err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.tasks, taskKey(atespace, name))
+	delete(s.taskSaveSeq, taskKey(atespace, name))
 	return nil
 }
 

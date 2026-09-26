@@ -1836,10 +1836,13 @@ func displayWorkerIP(workerIP string) string {
 }
 
 func listenerProtocol(l *v1alpha1.Listener) string {
-	if l == nil || strings.TrimSpace(l.Protocol) == "" {
+	// A padded protocol (" http ") renders with stray spaces in the
+	// get-list "80/ http " and describe "80 ( http )" views; displayPhase
+	// trims padded phases, so the protocol rule trims too.
+	if l == nil {
 		return ""
 	}
-	return l.Protocol
+	return strings.TrimSpace(l.Protocol)
 }
 
 // formatParamValue renders a model parameter value for `ax describe model`.

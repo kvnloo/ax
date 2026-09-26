@@ -29,3 +29,21 @@ func TestListenerProtocolOmitsEmpty(t *testing.T) {
 		})
 	}
 }
+
+// A padded protocol (" http ") rendered with stray spaces in the get-list
+// "80/ http " and describe "80 ( http )" views. displayPhase trims padded
+// phases, so the protocol rule trims too. Red on base: listenerProtocol
+// returned the raw value, so padded rendered untrimmed.
+func TestListenerProtocolTrimsPadded(t *testing.T) {
+	for in, want := range map[string]string{
+		" http ":  "http",
+		"\tTCP\n": "TCP",
+		"HTTPS":   "HTTPS",
+		"   ":     "",
+	} {
+		l := &v1alpha1.Listener{Name: "web", Port: 80, Protocol: in}
+		if got := listenerProtocol(l); got != want {
+			t.Errorf("listenerProtocol(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

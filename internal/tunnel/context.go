@@ -32,11 +32,17 @@ type kubeConfig struct {
 // 2. KUBECONTEXT environment variable
 // 3. ~/.kube/config current-context (fast parse via YAML)
 // 4. Fallback to 'kubectl config current-context'
+//
+// A whitespace-only override or KUBECONTEXT counts as unset: neither is a
+// real context name, and returning one verbatim hands kubectl
+// `--context=" "` and produces a bogus "_.json" state file via
+// SanitizeContext instead of auto-detecting (copy-paste leaves " " behind
+// the same way it leaves trailing slashes on --server).
 func CurrentContext(override string) (string, error) {
-	if override != "" {
+	if strings.TrimSpace(override) != "" {
 		return override, nil
 	}
-	if env := os.Getenv("KUBECONTEXT"); env != "" {
+	if env := os.Getenv("KUBECONTEXT"); strings.TrimSpace(env) != "" {
 		return env, nil
 	}
 

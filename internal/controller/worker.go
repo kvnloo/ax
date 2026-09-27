@@ -128,6 +128,13 @@ func (w *Worker) processEvent(ctx context.Context, ev store.TaskEvent) error {
 	}
 
 	var gw *v1alpha1.Gateway
+	// The store interface does not promise a non-nil Spec, and Spec is
+	// dereferenced below (Gateway lookup, WorkspaceRefs). Reconcile defaults
+	// it at its own entry; do the same here so a spec-less task can never
+	// panic the worker loop.
+	if task.Spec == nil {
+		task.Spec = &v1alpha1.TaskSpec{}
+	}
 	if task.Spec.Gateway != nil && task.Spec.Gateway.Name != "" {
 		g, err := w.store.GetGateway(ctx, task.Metadata.Atespace, task.Spec.Gateway.Name)
 		if err == nil {

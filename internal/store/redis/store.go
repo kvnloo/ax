@@ -32,6 +32,11 @@ const (
 	defaultStreamName    = "ax:stream:tasks"
 	defaultReadBatchSize = 10
 	defaultReadBlock     = 2 * time.Second
+	// defaultClaimIdle is how long a stream entry may sit unacknowledged in a
+	// consumer group's pending list before another consumer reclaims it. It is
+	// deliberately generous: reclaiming an entry another consumer is still
+	// processing causes duplicate (idempotent) reconciles.
+	defaultClaimIdle = 30 * time.Second
 )
 
 var (
@@ -50,6 +55,12 @@ type Options struct {
 	// ReadBlock is how long one XREADGROUP call waits for events before returning
 	// empty. Shorter values make shutdown more responsive at the cost of more calls.
 	ReadBlock time.Duration
+	// ClaimIdle is how long an entry may sit unacknowledged in the group's
+	// pending list before another consumer reclaims it via XAUTOCLAIM. Without
+	// reclamation, entries read by a consumer that crashed before Ack are never
+	// redelivered: XREADGROUP ">" only sees new entries, and a restarted worker
+	// joins with a fresh consumer name.
+	ClaimIdle time.Duration
 }
 
 // Store is a Redis-backed implementation of store.Store.
@@ -71,6 +82,9 @@ func NewStore(client *redis.Client, opts Options) *Store {
 	}
 	if opts.ReadBlock <= 0 {
 		opts.ReadBlock = defaultReadBlock
+	}
+	if opts.ClaimIdle <= 0 {
+		opts.ClaimIdle = defaultClaimIdle
 	}
 	return &Store{
 		client: client,
@@ -765,6 +779,17 @@ func (sub *subscription) Next(ctx context.Context) (store.TaskEvent, error) {
 // read performs one blocking XREADGROUP call. It returns an empty slice, not an
 // error, when the block time elapses without events.
 func (sub *subscription) read(ctx context.Context) ([]store.TaskEvent, error) {
+	// First reclaim entries a previous consumer read but never acknowledged
+	// (crashed before Ack). XREADGROUP ">" below only delivers new entries, so
+	// without this a restarted worker — which joins with a fresh consumer name
+	// — would never see them, and e.g. a missed delete event would leave the
+	// task stuck Terminating with its actor leaked.
+	if claimed, err := sub.claimIdle(ctx); err != nil {
+		return nil, err
+	} else if len(claimed) > 0 {
+		return claimed, nil
+	}
+
 	streams, err := sub.store.client.XReadGroup(ctx, &redis.XReadGroupArgs{
 		Group:    sub.group,
 		Consumer: sub.consumer,
@@ -784,6 +809,35 @@ func (sub *subscription) read(ctx context.Context) ([]store.TaskEvent, error) {
 		for _, msg := range stream.Messages {
 			events = append(events, eventFromMessage(msg))
 		}
+	}
+	return events, nil
+}
+
+// claimIdle takes ownership of this group's pending entries that have been idle
+// longer than ClaimIdle and returns them as task events. Claimed entries are
+// processed and Acked like new ones; delivery stays at-least-once.
+func (sub *subscription) claimIdle(ctx context.Context) ([]store.TaskEvent, error) {
+	var events []store.TaskEvent
+	start := "0-0"
+	for {
+		msgs, next, err := sub.store.client.XAutoClaim(ctx, &redis.XAutoClaimArgs{
+			Stream:   sub.store.opts.StreamName,
+			Group:    sub.group,
+			Consumer: sub.consumer,
+			MinIdle:  sub.store.opts.ClaimIdle,
+			Start:    start,
+			Count:    sub.store.opts.ReadBatchSize,
+		}).Result()
+		if err != nil {
+			return nil, fmt.Errorf("claiming idle task events: %w", err)
+		}
+		for _, msg := range msgs {
+			events = append(events, eventFromMessage(msg))
+		}
+		if next == "0-0" {
+			break
+		}
+		start = next
 	}
 	return events, nil
 }

@@ -274,6 +274,11 @@ func (s *Store) UpdateTaskStatus(ctx context.Context, atespace, name string, sta
 		return err
 	}
 
+	// A nil status would round-trip as a nil Status on the stored record,
+	// breaking the store's non-nil Status invariant (SaveTask defaults it).
+	if status == nil {
+		status = &v1alpha1.TaskStatus{}
+	}
 	task.Status = status
 	data, err := jsonMarshalOpts.Marshal(task)
 	if err != nil {

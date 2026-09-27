@@ -220,6 +220,11 @@ func (s *MemoryStore) DeleteTask(ctx context.Context, atespace, name string) err
 }
 
 func (s *MemoryStore) SaveGateway(ctx context.Context, gw *v1alpha1.Gateway) error {
+	// The Redis store tolerates nil Metadata; keep the interface contract
+	// identical here instead of panicking on the dereference below.
+	if gw.Metadata == nil {
+		gw.Metadata = &v1alpha1.ObjectMeta{}
+	}
 	if gw.Metadata.Name == "" {
 		return errors.New("gateway name is required")
 	}
@@ -268,6 +273,11 @@ func (s *MemoryStore) DeleteGateway(ctx context.Context, atespace, name string) 
 }
 
 func (s *MemoryStore) SaveModel(ctx context.Context, model *v1alpha1.Model) error {
+	// The Redis store tolerates nil Metadata; keep the interface contract
+	// identical here instead of panicking on the dereference below.
+	if model.Metadata == nil {
+		model.Metadata = &v1alpha1.ObjectMeta{}
+	}
 	if model.Metadata.Name == "" {
 		return errors.New("model name is required")
 	}
@@ -316,6 +326,11 @@ func (s *MemoryStore) DeleteModel(ctx context.Context, atespace, name string) er
 }
 
 func (s *MemoryStore) SaveWorkspace(ctx context.Context, ws *v1alpha1.Workspace) error {
+	// The Redis store tolerates nil Metadata; keep the interface contract
+	// identical here instead of panicking on the dereference below.
+	if ws.Metadata == nil {
+		ws.Metadata = &v1alpha1.ObjectMeta{}
+	}
 	if ws.Metadata.Name == "" {
 		return errors.New("workspace name is required")
 	}

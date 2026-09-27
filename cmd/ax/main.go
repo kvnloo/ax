@@ -824,12 +824,22 @@ func runWatch(serverURL, atespace string, args []string) error {
 	return nil
 }
 
+// parseDeleteArgs validates `ax delete` args before dialing: `ax delete task
+// foo bar` silently dropped "bar" under the old `len(args) < 2` check.
+func parseDeleteArgs(args []string) (kind, name string, err error) {
+	if len(args) != 2 {
+		return "", "", fmt.Errorf("usage: ax delete <task|gateway|workspace|model> <name>")
+	}
+	kind, err = normalizeKind(args[0])
+	if err != nil {
+		return "", "", err
+	}
+	return kind, args[1], nil
+}
+
 // runDelete removes one resource by kind and name.
 func runDelete(serverURL, atespace string, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: ax delete <task|gateway|workspace|model> <name>")
-	}
-	kind, err := normalizeKind(args[0])
+	kind, name, err := parseDeleteArgs(args)
 	if err != nil {
 		return err
 	}
@@ -849,7 +859,7 @@ func runDelete(serverURL, atespace string, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	return deleteResource(ctx, client, kind, atespace, args[1])
+	return deleteResource(ctx, client, kind, atespace, name)
 }
 
 const (

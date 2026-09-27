@@ -177,6 +177,9 @@ func (s *MemoryStore) UpdateTaskStatus(ctx context.Context, atespace, name strin
 }
 
 func (s *MemoryStore) MarkTaskDeleting(ctx context.Context, atespace, name string) error {
+	if atespace == "" {
+		atespace = "default"
+	}
 	key := taskKey(atespace, name)
 
 	s.mu.Lock()

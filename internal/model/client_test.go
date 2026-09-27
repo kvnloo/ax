@@ -130,8 +130,11 @@ func TestClient_GeminiHTTP(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("expected POST, got %s", r.Method)
 		}
-		if !r.URL.Query().Has("key") {
-			t.Errorf("expected key in query params")
+		if got := r.Header.Get("x-goog-api-key"); got == "" {
+			t.Errorf("expected x-goog-api-key header")
+		}
+		if r.URL.Query().Has("key") {
+			t.Errorf("API key must not appear in the URL query string")
 		}
 
 		w.Header().Set("Content-Type", "application/json")

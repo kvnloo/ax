@@ -162,7 +162,16 @@ func (s *MemoryStore) UpdateTaskStatus(ctx context.Context, atespace, name strin
 	if !ok {
 		return store.ErrNotFound
 	}
-	t.Status = status
+	// Keep the store's invariant that Status is never nil: SaveTask defaults
+	// it, so a nil update must not reintroduce a nil that would panic the
+	// next consumer. Clone the caller's status so the stored record is never
+	// shared with the caller: generated protobuf messages carry internal
+	// state (including a mutex), and aliasing the caller's object would let
+	// a later caller-side mutation silently rewrite the stored status.
+	if status == nil {
+		status = &v1alpha1.TaskStatus{}
+	}
+	t.Status = clone(status)
 	cp := clone(t)
 
 	if chs, ok := s.watchers[key]; ok {

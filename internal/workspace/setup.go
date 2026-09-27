@@ -79,7 +79,8 @@ type SetupResult struct {
 // maiden run so subsequent calls are no-ops.
 //
 // Git failures are logged and recorded under AXDir but do not abort setup. The marker
-// is withheld in that case so the next start retries the clone.
+// is withheld in that case so the next start retries the clone, and an error is
+// returned so the caller does not report the workspace ready.
 func SetupWorkspace(ctx context.Context, ws *v1alpha1.Workspace, targetPath string, goal string) (*SetupResult, error) {
 	if targetPath == "" {
 		targetPath = defaultWorkspacePath
@@ -119,7 +120,7 @@ func SetupWorkspace(ctx context.Context, ws *v1alpha1.Workspace, targetPath stri
 
 	if !gitOK {
 		slog.Warn("maiden run workspace setup completed with errors; marker omitted to allow retry", "path", targetPath)
-		return res, nil
+		return res, fmt.Errorf("git setup failed for workspace at %s", targetPath)
 	}
 
 	writeMarker(markerPath, ws)

@@ -417,7 +417,11 @@ func (r *TaskReconciler) ReconcileDelete(ctx context.Context, atespace, taskName
 		return err
 	}
 	if err := r.deleteTaskTemplates(ctx, atespace, taskName); err != nil {
-		slog.Warn("could not clean up actor templates for task", "task", taskName, "error", err)
+		// Do not swallow this: the worker keeps the task record in Terminating
+		// when ReconcileDelete fails, so the failure stays visible and a later
+		// `ax delete` retries the cleanup. Returning nil here would delete the
+		// record and orphan the templates with no retry path.
+		return fmt.Errorf("cleaning up actor templates for task %q: %w", taskName, err)
 	}
 	return nil
 }

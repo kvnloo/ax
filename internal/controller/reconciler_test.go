@@ -40,6 +40,8 @@ type mockControlServer struct {
 	deletedActors    []string
 	actorTemplates   map[string]bool
 	deletedTemplates []string
+	// deleteTemplateErr, when set, makes DeleteActorTemplate fail persistently.
+	deleteTemplateErr error
 }
 
 // noSecrets is a SecretResolver for tests: it never finds a key and never touches a cluster.
@@ -131,6 +133,9 @@ func (m *mockControlServer) ListActorTemplates(ctx context.Context, req *ateapip
 
 func (m *mockControlServer) DeleteActorTemplate(ctx context.Context, req *ateapipb.DeleteActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
 	name := req.GetActorTemplate().GetName()
+	if m.deleteTemplateErr != nil {
+		return nil, m.deleteTemplateErr
+	}
 	delete(m.actorTemplates, name)
 	m.deletedTemplates = append(m.deletedTemplates, name)
 	return &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Name: name}}, nil

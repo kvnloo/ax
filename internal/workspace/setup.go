@@ -128,16 +128,25 @@ func SetupWorkspace(ctx context.Context, ws *v1alpha1.Workspace, targetPath stri
 }
 
 // cloneRepos fetches each declared repository into the workspace. It returns the
-// repositories that succeeded and whether every clone succeeded.
+// repositories that succeeded and whether every clone succeeded. Two entries
+// resolving to the same destination would silently replace each other's
+// checkout, so the second and later entries are skipped with a warning.
 func cloneRepos(ctx context.Context, repos []*v1alpha1.GitRepo, targetPath string) ([]string, bool) {
 	var cloned []string
 	ok := true
+	seen := make(map[string]string, len(repos))
 	for _, repo := range repos {
 		if repo == nil || repo.Repo == "" {
 			continue
 		}
 
 		dest := cloneDestination(repo, targetPath)
+		if first, dup := seen[dest]; dup {
+			slog.Warn("duplicate git clone destination; skipping", "repo", repo.Repo, "dest", dest, "first", first)
+			continue
+		}
+		seen[dest] = repo.Repo
+
 		if err := os.MkdirAll(dest, dirPerm); err != nil {
 			slog.Warn("failed to create destination dir", "dir", dest, "error", err)
 		}

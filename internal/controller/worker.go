@@ -155,7 +155,13 @@ func (w *Worker) processEvent(ctx context.Context, ev store.TaskEvent) error {
 	reconciled, err := w.reconciler.Reconcile(ctx, task, gw, workspaces...)
 	if err != nil {
 		task.Status.Phase = "Failed"
-		_ = w.store.UpdateTaskStatus(ctx, task.Metadata.Atespace, task.Metadata.Name, task.Status)
+		// The Failed marker is the operator's only signal that this task will
+		// not recover on its own; losing it silently leaves a stale phase in
+		// the record, so a store failure here must surface in the returned
+		// error (Run logs it) rather than being discarded.
+		if uerr := w.store.UpdateTaskStatus(ctx, task.Metadata.Atespace, task.Metadata.Name, task.Status); uerr != nil {
+			return fmt.Errorf("reconciling task %s/%s: %w (additionally failed to mark task Failed: %v)", task.Metadata.Atespace, task.Metadata.Name, err, uerr)
+		}
 		return fmt.Errorf("reconciling task %s/%s: %w", task.Metadata.Atespace, task.Metadata.Name, err)
 	}
 

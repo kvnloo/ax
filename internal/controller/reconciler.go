@@ -251,12 +251,16 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, gat
 		defer ticker.Stop()
 
 		checkReady := func() bool {
-			// 1. Direct readyz check
-			req, _ := http.NewRequestWithContext(pollCtx, http.MethodGet, readyURL, nil)
-			if resp, err := r.httpClient.Do(req); err == nil {
-				_ = resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					return true
+			// 1. Direct readyz check.
+			// A malformed worker address (bad data from the substrate) makes
+			// request construction fail; treat it as a readiness miss rather
+			// than handing a nil *http.Request to the client (which panics).
+			if req, err := http.NewRequestWithContext(pollCtx, http.MethodGet, readyURL, nil); err == nil && req != nil {
+				if resp, err := r.httpClient.Do(req); err == nil {
+					_ = resp.Body.Close()
+					if resp.StatusCode == http.StatusOK {
+						return true
+					}
 				}
 			}
 

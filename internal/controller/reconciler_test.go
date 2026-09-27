@@ -454,3 +454,49 @@ func TestReconcileDelete_RemovesActorAndTemplates(t *testing.T) {
 		}
 	}
 }
+
+// A malformed worker address from the substrate must not panic the
+// reconciler: building the readyz request fails, so the check is a plain
+// readiness miss (WorkspaceReady=False).
+func TestTaskReconciler_MalformedWorkerAddress(t *testing.T) {
+	ctx := context.Background()
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer lis.Close()
+
+	mockSrv := &mockControlServer{workerIP: "not a valid host"}
+	grpcServer := grpc.NewServer()
+	ateapipb.RegisterControlServer(grpcServer, mockSrv)
+	go grpcServer.Serve(lis)
+	defer grpcServer.Stop()
+
+	client, err := substrate.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("failed to create substrate client: %v", err)
+	}
+	defer client.Close()
+
+	reconciler := controller.NewTaskReconciler(client, "test-template", "ax-system")
+	reconciler.SecretResolver = noSecrets
+	reconciler.WorkspaceReadyTimeout = 200 * time.Millisecond
+
+	task := &v1alpha1.Task{
+		ApiVersion: v1alpha1.APIVersion,
+		Kind:       v1alpha1.KindTask,
+		Metadata: &v1alpha1.ObjectMeta{
+			Name:     "badaddr-task",
+			Atespace: "default",
+		},
+		Spec: &v1alpha1.TaskSpec{},
+	}
+
+	reconciled, err := reconciler.Reconcile(ctx, task, nil)
+	if err != nil {
+		t.Fatalf("Reconcile failed: %v", err)
+	}
+	assertCondition(t, reconciled, "WorkspaceReady", "False", "Initializing")
+	assertCondition(t, reconciled, "Ready", "False", "WorkspaceInitializing")
+}

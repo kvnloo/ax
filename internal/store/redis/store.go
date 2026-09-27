@@ -725,11 +725,16 @@ func (s *Store) GetWorkspace(ctx context.Context, atespace, name string) (*v1alp
 }
 
 // Subscribe joins a Redis Streams consumer group, creating the group (and the
-// stream) if needed. A new group starts at the tail of the stream, so it only
-// sees events published after it was created; an existing group keeps its
-// position and any pending entries.
+// stream) if needed. A new group starts at the beginning of the stream so it
+// replays events published before the group existed; an existing group keeps
+// its position and any pending entries. Replay is safe: delivery is
+// at-least-once and reconciliation is level-triggered, so reprocessed events
+// converge instead of duplicating work. Starting at the tail instead would
+// permanently lose those events — the worker loop is purely event-driven with
+// no resync, so a task created while no worker was running would never be
+// reconciled.
 func (s *Store) Subscribe(ctx context.Context, group, consumer string) (store.Subscription, error) {
-	err := s.client.XGroupCreateMkStream(ctx, s.opts.StreamName, group, "$").Err()
+	err := s.client.XGroupCreateMkStream(ctx, s.opts.StreamName, group, "0").Err()
 	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
 		return nil, fmt.Errorf("creating consumer group %q: %w", group, err)
 	}

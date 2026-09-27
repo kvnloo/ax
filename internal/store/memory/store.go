@@ -109,9 +109,14 @@ func (s *MemoryStore) SaveTask(ctx context.Context, task *v1alpha1.Task) error {
 	}
 	s.mu.Unlock()
 
+	// Publish the reconcile event. Block until a consumer takes it rather
+	// than silently dropping it: the controller performs no startup resync,
+	// so a dropped event means the task is never reconciled. Caller
+	// cancellation aborts the wait.
 	select {
 	case s.events <- event:
-	default:
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 
 	return nil

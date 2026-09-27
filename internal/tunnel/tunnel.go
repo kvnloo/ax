@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -170,8 +171,19 @@ func IsTunnelHealthy(port int) bool {
 	if err != nil {
 		return false
 	}
-	_ = resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	// A stale tunnel record may point at a port now owned by a different
+	// process whose own /healthz also answers 200. The ax server answers
+	// with the literal body "ok"; require it before treating the port as
+	// a live tunnel, otherwise the CLI would talk to the wrong server.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64))
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(body)) == "ok"
 }
 
 // EnsureServerURL resolves the AX server URL.

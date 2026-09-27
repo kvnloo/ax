@@ -1116,23 +1116,9 @@ func runTunnel(args []string) error {
 }
 
 func runSSH(serverURL, atespace, kubeContext string, args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: ax ssh <task-name> [-- command...]")
-	}
-
-	taskName := args[0]
-	var cmdToRun []string
-	for i := 1; i < len(args); i++ {
-		if args[i] == "--" {
-			cmdToRun = args[i+1:]
-			break
-		} else {
-			cmdToRun = append(cmdToRun, args[i])
-		}
-	}
-
-	if len(cmdToRun) == 0 {
-		cmdToRun = []string{"/bin/sh"}
+	taskName, cmdToRun, err := parseSSHArgs(args)
+	if err != nil {
+		return err
 	}
 
 	client, conn, err := getAXClient(serverURL)
@@ -1227,4 +1213,37 @@ func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 	}
 
 	return nil
+}
+
+// parseSSHArgs validates `ax ssh <task-name> [-- command...]` before dialing
+// (fail fast). Any tokens between the task name and the first "--" separator
+// would previously be silently discarded (e.g. `ax ssh foo typo -- ls`
+// dropped "typo" and ran `ls`), so they are now a usage error. The command
+// itself always starts after "--" (or, with no separator, right after the
+// task name).
+func parseSSHArgs(args []string) (taskName string, cmdToRun []string, err error) {
+	if len(args) == 0 {
+		return "", nil, fmt.Errorf("usage: ax ssh <task-name> [-- command...]")
+	}
+	taskName = args[0]
+	rest := args[1:]
+	sep := -1
+	for i, a := range rest {
+		if a == "--" {
+			sep = i
+			break
+		}
+	}
+	if sep >= 0 {
+		if sep > 0 {
+			return "", nil, fmt.Errorf("unexpected argument(s) before --: %s (usage: ax ssh <task-name> [-- command...])", strings.Join(rest[:sep], " "))
+		}
+		cmdToRun = rest[sep+1:]
+	} else {
+		cmdToRun = rest
+	}
+	if len(cmdToRun) == 0 {
+		cmdToRun = []string{"/bin/sh"}
+	}
+	return taskName, cmdToRun, nil
 }

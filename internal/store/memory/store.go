@@ -200,6 +200,11 @@ func (s *MemoryStore) MarkTaskDeleting(ctx context.Context, atespace, name strin
 	}
 	s.mu.Unlock()
 
+	// The delete event is edge-triggered: it is the only signal that tells the
+	// controller to tear down the actor. Unlike reconcile nudges it must not be
+	// silently dropped when the event buffer is full, or the task would sit in
+	// Terminating with its actor leaked and no retry route. Wait for room (or
+	// caller cancellation) instead of discarding it.
 	select {
 	case s.events <- store.TaskEvent{
 		ID:       fmt.Sprintf("%d", time.Now().UnixNano()),
@@ -207,9 +212,10 @@ func (s *MemoryStore) MarkTaskDeleting(ctx context.Context, atespace, name strin
 		Name:     name,
 		Action:   "delete",
 	}:
-	default:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	return nil
 }
 
 func (s *MemoryStore) DeleteTask(ctx context.Context, atespace, name string) error {

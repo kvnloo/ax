@@ -145,8 +145,11 @@ func (s *MemoryStore) ListTasks(ctx context.Context, atespace string, limit, off
 	if offset >= int64(len(result)) {
 		return []*v1alpha1.Task{}, nil
 	}
+	if limit <= 0 {
+		limit = 50
+	}
 	end := offset + limit
-	if limit <= 0 || end > int64(len(result)) {
+	if end > int64(len(result)) {
 		end = int64(len(result))
 	}
 	return result[offset:end], nil

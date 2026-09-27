@@ -26,7 +26,9 @@ import (
 	"github.com/google/ax/internal/substrate"
 	"github.com/google/ax/pkg/apis/v1alpha1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 type mockControlServer struct {
@@ -40,6 +42,9 @@ type mockControlServer struct {
 	deletedActors    []string
 	actorTemplates   map[string]bool
 	deletedTemplates []string
+	// resumeActorErrs injects per-call ResumeActor failures; each call pops
+	// the head, so a test can script transient-then-success sequences.
+	resumeActorErrs []error
 }
 
 // noSecrets is a SecretResolver for tests: it never finds a key and never touches a cluster.
@@ -76,6 +81,11 @@ func (m *mockControlServer) ResumeActor(ctx context.Context, req *ateapipb.Resum
 		name = req.Actor.Name
 	}
 	m.resumedActors = append(m.resumedActors, name)
+	if len(m.resumeActorErrs) > 0 {
+		err := m.resumeActorErrs[0]
+		m.resumeActorErrs = m.resumeActorErrs[1:]
+		return nil, err
+	}
 	wIP := "10.244.1.42"
 	if m.workerIP != "" {
 		wIP = m.workerIP
@@ -452,5 +462,94 @@ func TestReconcileDelete_RemovesActorAndTemplates(t *testing.T) {
 		if !mockSrv.actorTemplates[keep] {
 			t.Errorf("template %s should not have been deleted", keep)
 		}
+	}
+}
+
+// reconcileWithMock runs Reconcile against a mock substrate server carrying
+// the given mock, returning the reconciler, mock, and teardown.
+func reconcileWithMock(t *testing.T, mockSrv *mockControlServer) (*controller.TaskReconciler, func()) {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	grpcServer := grpc.NewServer()
+	ateapipb.RegisterControlServer(grpcServer, mockSrv)
+	go grpcServer.Serve(lis)
+
+	client, err := substrate.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("failed to create substrate client: %v", err)
+	}
+	reconciler := controller.NewTaskReconciler(client, "test-template", "ax-system")
+	reconciler.SecretResolver = noSecrets
+	reconciler.WorkspaceReadyTimeout = 200 * time.Millisecond
+	return reconciler, func() {
+		client.Close()
+		grpcServer.Stop()
+		lis.Close()
+	}
+}
+
+func retryTestTask() *v1alpha1.Task {
+	return &v1alpha1.Task{
+		ApiVersion: v1alpha1.APIVersion,
+		Kind:       v1alpha1.KindTask,
+		Metadata: &v1alpha1.ObjectMeta{
+			Name:     "retry-task",
+			Atespace: "default",
+		},
+		Spec: &v1alpha1.TaskSpec{
+			Image:   "ghrc.io/my-org/my-image",
+			Command: []string{"/bin/task-runner"},
+			Gateway: &v1alpha1.GatewayRef{Name: "default-gateway"},
+		},
+		Status: &v1alpha1.TaskStatus{},
+	}
+}
+
+// TestReconcile_RetriesTransientResumeActor proves the core defect: a
+// transient control-plane error (Unavailable) on ResumeActor used to mark
+// the task Failed after a single attempt. The substrate client now retries
+// transient errors, so two blips converge to Running instead of wedging.
+func TestReconcile_RetriesTransientResumeActor(t *testing.T) {
+	mockSrv := &mockControlServer{resumeActorErrs: []error{
+		status.Error(codes.Unavailable, "control plane blip"),
+		status.Error(codes.Unavailable, "control plane blip"),
+	}}
+	reconciler, teardown := reconcileWithMock(t, mockSrv)
+	defer teardown()
+
+	reconciled, err := reconciler.Reconcile(context.Background(), retryTestTask(), nil)
+	if err != nil {
+		t.Fatalf("Reconcile should succeed after transient retries, got: %v", err)
+	}
+	if reconciled.Status.Phase != "Running" {
+		t.Errorf("expected phase 'Running', got %q", reconciled.Status.Phase)
+	}
+	if len(mockSrv.resumedActors) != 3 {
+		t.Errorf("expected 3 resume attempts (2 transient + 1 success), got %d", len(mockSrv.resumedActors))
+	}
+}
+
+// TestReconcile_PermanentResumeActorErrorNotRetried pins the error-mapping
+// half: a permanent error (InvalidArgument) must surface immediately after
+// a single attempt, never burn retries.
+func TestReconcile_PermanentResumeActorErrorNotRetried(t *testing.T) {
+	mockSrv := &mockControlServer{resumeActorErrs: []error{
+		status.Error(codes.InvalidArgument, "bad actor spec"),
+	}}
+	reconciler, teardown := reconcileWithMock(t, mockSrv)
+	defer teardown()
+
+	reconciled, err := reconciler.Reconcile(context.Background(), retryTestTask(), nil)
+	if err == nil {
+		t.Fatal("expected Reconcile to fail on permanent error")
+	}
+	if reconciled.Status.Phase != "Failed" {
+		t.Errorf("expected phase 'Failed', got %q", reconciled.Status.Phase)
+	}
+	if len(mockSrv.resumedActors) != 1 {
+		t.Errorf("permanent error must not be retried, got %d attempts", len(mockSrv.resumedActors))
 	}
 }

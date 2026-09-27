@@ -178,6 +178,8 @@ func (c *Client) Close() error {
 }
 
 // EnsureAtespace creates the atespace if it does not already exist.
+// Transient control-plane errors are retried with backoff; AlreadyExists is
+// the normal idempotent outcome and is not an error.
 func (c *Client) EnsureAtespace(ctx context.Context, atespace string) error {
 	req := &ateapipb.CreateAtespaceRequest{
 		Atespace: &ateapipb.Atespace{
@@ -186,8 +188,14 @@ func (c *Client) EnsureAtespace(ctx context.Context, atespace string) error {
 			},
 		},
 	}
-	_, err := c.control.CreateAtespace(ctx, req)
-	if err != nil && status.Code(err) != codes.AlreadyExists {
+	err := doWithRetry(ctx, "EnsureAtespace", func(ctx context.Context) error {
+		_, err := c.control.CreateAtespace(ctx, req)
+		if err != nil && status.Code(err) != codes.AlreadyExists {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
 		return fmt.Errorf("creating atespace %q: %w", atespace, err)
 	}
 	return nil
@@ -277,7 +285,22 @@ func BuildActorTemplate(atespace, name, image string, envMap map[string]string, 
 }
 
 // EnsureActorTemplateWithImage creates an ActorTemplate using the specified container image and optional environment variables.
+// Transient control-plane errors are retried with backoff; a transient Get
+// failure must not silently fall back to the default template.
 func (c *Client) EnsureActorTemplateWithImage(ctx context.Context, baseAtespace, baseTemplate, targetAtespace, targetTemplate, image string, extraEnv ...map[string]string) (*ateapipb.ActorTemplate, error) {
+	var result *ateapipb.ActorTemplate
+	err := doWithRetry(ctx, "EnsureActorTemplateWithImage", func(ctx context.Context) error {
+		var err error
+		result, err = c.ensureActorTemplateWithImageOnce(ctx, targetAtespace, targetTemplate, image, extraEnv...)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (c *Client) ensureActorTemplateWithImageOnce(ctx context.Context, targetAtespace, targetTemplate, image string, extraEnv ...map[string]string) (*ateapipb.ActorTemplate, error) {
 	existing, err := c.GetActorTemplate(ctx, targetAtespace, targetTemplate)
 	if err == nil && existing != nil {
 		return existing, nil
@@ -305,7 +328,21 @@ func (c *Client) EnsureActorTemplateWithImage(ctx context.Context, baseAtespace,
 }
 
 // EnsureActor creates an Actor in the specified atespace deriving from an ActorTemplate.
+// Transient control-plane errors are retried with backoff.
 func (c *Client) EnsureActor(ctx context.Context, atespace, actorName, templateAtespace, templateName string) (*ateapipb.Actor, error) {
+	var result *ateapipb.Actor
+	err := doWithRetry(ctx, "EnsureActor", func(ctx context.Context) error {
+		var err error
+		result, err = c.ensureActorOnce(ctx, atespace, actorName, templateAtespace, templateName)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (c *Client) ensureActorOnce(ctx context.Context, atespace, actorName, templateAtespace, templateName string) (*ateapipb.Actor, error) {
 	req := &ateapipb.CreateActorRequest{
 		Actor: &ateapipb.Actor{
 			Metadata: &ateapipb.ResourceMetadata{
@@ -367,6 +404,8 @@ func (c *Client) EnsureActor(ctx context.Context, atespace, actorName, templateA
 }
 
 // ResumeActor resumes the specified actor onto a worker and returns the worker details.
+// Transient control-plane errors are retried with backoff; a single blip
+// must not mark the task Failed.
 func (c *Client) ResumeActor(ctx context.Context, atespace, actorName string) (*ateapipb.Actor, string, error) {
 	req := &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{
@@ -374,7 +413,12 @@ func (c *Client) ResumeActor(ctx context.Context, atespace, actorName string) (*
 			Name:     actorName,
 		},
 	}
-	resp, err := c.control.ResumeActor(ctx, req)
+	var resp *ateapipb.ResumeActorResponse
+	err := doWithRetry(ctx, "ResumeActor", func(ctx context.Context) error {
+		var err error
+		resp, err = c.control.ResumeActor(ctx, req)
+		return err
+	})
 	if err != nil {
 		return nil, "", fmt.Errorf("resuming actor %s/%s: %w", atespace, actorName, err)
 	}
@@ -389,6 +433,7 @@ func (c *Client) ResumeActor(ctx context.Context, atespace, actorName string) (*
 }
 
 // SuspendActor suspends the specified actor, triggering state checkpointing.
+// Transient control-plane errors are retried with backoff.
 func (c *Client) SuspendActor(ctx context.Context, atespace, actorName string) error {
 	req := &ateapipb.SuspendActorRequest{
 		Actor: &ateapipb.ObjectRef{
@@ -396,7 +441,10 @@ func (c *Client) SuspendActor(ctx context.Context, atespace, actorName string) e
 			Name:     actorName,
 		},
 	}
-	_, err := c.control.SuspendActor(ctx, req)
+	err := doWithRetry(ctx, "SuspendActor", func(ctx context.Context) error {
+		_, err := c.control.SuspendActor(ctx, req)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("suspending actor %s/%s: %w", atespace, actorName, err)
 	}

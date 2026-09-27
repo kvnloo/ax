@@ -132,6 +132,9 @@ func SetupWorkspace(ctx context.Context, ws *v1alpha1.Workspace, targetPath stri
 func cloneRepos(ctx context.Context, repos []*v1alpha1.GitRepo, targetPath string) ([]string, bool) {
 	var cloned []string
 	ok := true
+	// Fresh diagnostics per setup attempt; per-repo sections append below.
+	writeStateFile(gitSuccessLog, nil)
+	writeStateFile(gitErrorLog, nil)
 	for _, repo := range repos {
 		if repo == nil || repo.Repo == "" {
 			continue
@@ -154,12 +157,12 @@ func cloneRepos(ctx context.Context, repos []*v1alpha1.GitRepo, targetPath strin
 		if err != nil {
 			ok = false
 			slog.Warn("git fetch error (continuing setup)", "repo", repo.Repo, "error", err, "output", string(out))
-			writeStateFile(gitErrorLog, fmt.Appendf(nil, "error: %v\noutput: %s\n", err, out))
+			appendStateFile(gitErrorLog, repo.Repo, fmt.Appendf(nil, "error: %v\noutput: %s\n", err, out))
 			continue
 		}
 
 		cloned = append(cloned, repo.Repo)
-		writeStateFile(gitSuccessLog, out)
+		appendStateFile(gitSuccessLog, repo.Repo, out)
 	}
 	return cloned, ok
 }
@@ -352,6 +355,26 @@ func writeMarker(path string, ws *v1alpha1.Workspace) {
 	content := fmt.Sprintf("workspace: %s\ninitialized_at: %s\n", name, time.Now().UTC().Format(time.RFC3339))
 	if err := os.WriteFile(path, []byte(content), filePerm); err != nil {
 		slog.Warn("failed to write initialized marker file", "path", path, "error", err)
+	}
+}
+
+// appendStateFile appends a headed section to a diagnostic file under AXDir,
+// logging rather than failing on error. Headers keep multi-repo logs
+// attributable to the repo that produced each section.
+func appendStateFile(name, header string, data []byte) {
+	path := filepath.Join(AXDir, name)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, filePerm)
+	if err != nil {
+		slog.Warn("failed to open state file", "path", path, "error", err)
+		return
+	}
+	defer f.Close()
+	if _, err := fmt.Fprintf(f, "=== %s ===\n", header); err != nil {
+		slog.Warn("failed to write state file", "path", path, "error", err)
+		return
+	}
+	if _, err := f.Write(data); err != nil {
+		slog.Warn("failed to write state file", "path", path, "error", err)
 	}
 }
 

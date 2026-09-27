@@ -927,7 +927,7 @@ func waitForDeletion(ctx context.Context, client v1alpha1.AXClient, kind, atespa
 // normalizeKind maps user-typed kinds ("task", "tasks", "Task") to the canonical
 // manifest kind, rejecting anything unknown.
 func normalizeKind(kind string) (string, error) {
-	switch strings.ToLower(strings.TrimSuffix(kind, "s")) {
+	switch strings.TrimSuffix(strings.ToLower(kind), "s") {
 	case "task":
 		return v1alpha1.KindTask, nil
 	case "gateway":
@@ -967,18 +967,34 @@ func manifestFromArgs(args []string) (data []byte, ok bool, err error) {
 	return nil, false, nil
 }
 
-func runSuspend(serverURL, atespace string, args []string) error {
-	name := ""
+// parseTaskNameArgs resolves the target of `ax suspend` / `ax resume`: an
+// optional task|tasks kind word (case-insensitive) followed by the name, or a
+// bare name. Without it, `ax suspend Task foo` targeted a task literally
+// named "Task" (dropping "foo"), `ax suspend gateway foo` targeted a task
+// named "gateway" instead of erroring, and extra args were silently dropped.
+// A lone kind word as the single arg stays a legitimate bare name.
+func parseTaskNameArgs(cmd string, args []string) (string, error) {
+	usage := fmt.Errorf("usage: ax %s task <name>", cmd)
+	if len(args) == 0 || len(args) > 2 {
+		return "", usage
+	}
 	if len(args) == 1 {
-		name = args[0]
-	} else if len(args) >= 2 {
-		if args[0] == "task" || args[0] == "tasks" {
-			name = args[1]
-		} else {
-			name = args[0]
-		}
-	} else {
-		return fmt.Errorf("usage: ax suspend task <name>")
+		return args[0], nil
+	}
+	kind, err := normalizeKind(args[0])
+	if err != nil {
+		return "", err
+	}
+	if kind != v1alpha1.KindTask {
+		return "", fmt.Errorf("ax %s only supports tasks, not %q", cmd, args[0])
+	}
+	return args[1], nil
+}
+
+func runSuspend(serverURL, atespace string, args []string) error {
+	name, err := parseTaskNameArgs("suspend", args)
+	if err != nil {
+		return err
 	}
 
 	client, conn, err := getAXClient(serverURL)
@@ -999,17 +1015,9 @@ func runSuspend(serverURL, atespace string, args []string) error {
 }
 
 func runResume(serverURL, atespace string, args []string) error {
-	name := ""
-	if len(args) == 1 {
-		name = args[0]
-	} else if len(args) >= 2 {
-		if args[0] == "task" || args[0] == "tasks" {
-			name = args[1]
-		} else {
-			name = args[0]
-		}
-	} else {
-		return fmt.Errorf("usage: ax resume task <name>")
+	name, err := parseTaskNameArgs("resume", args)
+	if err != nil {
+		return err
 	}
 
 	client, conn, err := getAXClient(serverURL)

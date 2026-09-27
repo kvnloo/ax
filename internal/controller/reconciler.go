@@ -439,25 +439,33 @@ func (r *TaskReconciler) deleteTaskTemplates(ctx context.Context, atespace, task
 			continue
 		}
 		slog.Info("deleting Substrate actor template for task", "atespace", atespace, "task", taskName, "template", name)
-		var delErr error
-		for attempt := 0; attempt < 5; attempt++ {
-			delErr = r.client.DeleteActorTemplate(ctx, atespace, name)
-			if delErr == nil || status.Code(delErr) == codes.NotFound {
-				delErr = nil
-				break
-			}
-			select {
-			case <-ctx.Done():
-				delErr = ctx.Err()
-				break
-			case <-time.After(500 * time.Millisecond):
-			}
-		}
+		delErr := deleteTemplateWithRetry(ctx, func(ctx context.Context) error {
+			return r.client.DeleteActorTemplate(ctx, atespace, name)
+		})
 		if delErr != nil {
 			errs = append(errs, delErr)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// deleteTemplateWithRetry deletes one ActorTemplate, retrying briefly on
+// transient (e.g. Aborted) failures. A cancelled context aborts immediately
+// instead of burning the remaining attempts on doomed calls.
+func deleteTemplateWithRetry(ctx context.Context, del func(context.Context) error) error {
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		err = del(ctx)
+		if err == nil || status.Code(err) == codes.NotFound {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	return err
 }
 
 // marshalWorkspaces renders the workspaces as a multi-document YAML stream in

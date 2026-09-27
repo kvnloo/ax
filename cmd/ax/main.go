@@ -775,6 +775,12 @@ func runWatch(serverURL, atespace string, args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: ax watch task <name>")
 	}
+	if k := strings.ToLower(strings.TrimSuffix(args[0], "s")); k != "task" {
+		return fmt.Errorf("usage: ax watch task <name> (cannot watch %q; only tasks are watchable)", args[0])
+	}
+	if len(args) > 2 {
+		return fmt.Errorf("usage: ax watch task <name> (unexpected extra argument %q)", args[2])
+	}
 	name := args[1]
 
 	client, conn, err := getAXClient(serverURL)

@@ -451,7 +451,11 @@ func (c *Client) SuspendActor(ctx context.Context, atespace, actorName string) e
 	return nil
 }
 
-// DeleteActor deletes the specified actor from Substrate.
+// DeleteActor deletes the specified actor from Substrate. Transient
+// control-plane errors are retried: a single blip on the delete path must
+// not strand the task in Terminating awaiting a manual re-delete. A missing
+// actor is not an error (idempotent deletes are safe to replay after a lost
+// response).
 func (c *Client) DeleteActor(ctx context.Context, atespace, actorName string) error {
 	req := &ateapipb.DeleteActorRequest{
 		Actor: &ateapipb.ObjectRef{
@@ -460,16 +464,29 @@ func (c *Client) DeleteActor(ctx context.Context, atespace, actorName string) er
 		},
 		AnyState: true,
 	}
-	_, err := c.control.DeleteActor(ctx, req)
-	if err != nil && status.Code(err) != codes.NotFound {
+	err := doWithRetry(ctx, "DeleteActor", func(ctx context.Context) error {
+		_, err := c.control.DeleteActor(ctx, req)
+		if err != nil && status.Code(err) != codes.NotFound {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
 		return fmt.Errorf("deleting actor %s/%s: %w", atespace, actorName, err)
 	}
 	return nil
 }
 
 // ListActorTemplates returns all ActorTemplates in the given atespace.
+// Transient control-plane errors are retried for the same reason as
+// DeleteActor: this is the head of the delete path.
 func (c *Client) ListActorTemplates(ctx context.Context, atespace string) ([]*ateapipb.ActorTemplate, error) {
-	resp, err := c.control.ListActorTemplates(ctx, &ateapipb.ListActorTemplatesRequest{Atespace: atespace})
+	var resp *ateapipb.ListActorTemplatesResponse
+	err := doWithRetry(ctx, "ListActorTemplates", func(ctx context.Context) error {
+		var err error
+		resp, err = c.control.ListActorTemplates(ctx, &ateapipb.ListActorTemplatesRequest{Atespace: atespace})
+		return err
+	})
 	if err != nil {
 		return nil, fmt.Errorf("listing actor templates in %s: %w", atespace, err)
 	}

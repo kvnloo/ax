@@ -47,11 +47,12 @@ func isTransientCode(c codes.Code) bool {
 
 // doWithRetry runs fn, retrying transient gRPC failures with exponential
 // backoff. Permanent errors return immediately; context cancellation aborts
-// the backoff and is reported as ctx.Err(). Only the reconcile-path RPCs
-// use this: they are idempotent (create-or-get / state transitions), and a
-// single transient control-plane blip must not mark a task Failed. The
-// delete path keeps its own retry policy in the reconciler and is excluded
-// so the two policies do not compound.
+// the backoff and is reported as ctx.Err(). The reconcile-path RPCs and the
+// delete-path head RPCs (DeleteActor, ListActorTemplates) use this: they are
+// idempotent (create-or-get / state transitions / NotFound-tolerant deletes),
+// and a single transient control-plane blip must not strand a task. The
+// per-template delete loop in the reconciler keeps its own retry policy and
+// is excluded from this helper so the two policies do not compound.
 func doWithRetry(ctx context.Context, op string, fn func(context.Context) error) error {
 	delay := retryBaseDelay
 	var err error

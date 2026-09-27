@@ -45,6 +45,10 @@ type mockControlServer struct {
 	// resumeActorErrs injects per-call ResumeActor failures; each call pops
 	// the head, so a test can script transient-then-success sequences.
 	resumeActorErrs []error
+	// deleteActorErrs / listTemplatesErrs do the same for the delete path's
+	// head RPCs.
+	deleteActorErrs   []error
+	listTemplatesErrs []error
 }
 
 // noSecrets is a SecretResolver for tests: it never finds a key and never touches a cluster.
@@ -126,10 +130,20 @@ func (m *mockControlServer) CreateActorEgressPolicy(ctx context.Context, req *at
 func (m *mockControlServer) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (*ateapipb.Actor, error) {
 	name := req.GetActor().GetName()
 	m.deletedActors = append(m.deletedActors, name)
+	if len(m.deleteActorErrs) > 0 {
+		err := m.deleteActorErrs[0]
+		m.deleteActorErrs = m.deleteActorErrs[1:]
+		return nil, err
+	}
 	return &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: name}}, nil
 }
 
 func (m *mockControlServer) ListActorTemplates(ctx context.Context, req *ateapipb.ListActorTemplatesRequest) (*ateapipb.ListActorTemplatesResponse, error) {
+	if len(m.listTemplatesErrs) > 0 {
+		err := m.listTemplatesErrs[0]
+		m.listTemplatesErrs = m.listTemplatesErrs[1:]
+		return nil, err
+	}
 	resp := &ateapipb.ListActorTemplatesResponse{}
 	for name := range m.actorTemplates {
 		resp.ActorTemplates = append(resp.ActorTemplates, &ateapipb.ActorTemplate{
@@ -551,5 +565,45 @@ func TestReconcile_PermanentResumeActorErrorNotRetried(t *testing.T) {
 	}
 	if len(mockSrv.resumedActors) != 1 {
 		t.Errorf("permanent error must not be retried, got %d attempts", len(mockSrv.resumedActors))
+	}
+}
+
+// TestReconcileDelete_RetriesTransientDeleteActor proves the repair: a
+// transient control-plane blip on DeleteActor used to fail ReconcileDelete
+// after a single attempt, stranding the task in Terminating until a manual
+// re-delete. The delete path's head RPCs now retry transient errors, so one
+// blip converges to a clean delete.
+func TestReconcileDelete_RetriesTransientDeleteActor(t *testing.T) {
+	mockSrv := &mockControlServer{
+		actorTemplates:  map[string]bool{},
+		deleteActorErrs: []error{status.Error(codes.Unavailable, "control plane blip")},
+	}
+	reconciler, teardown := reconcileWithMock(t, mockSrv)
+	defer teardown()
+
+	if err := reconciler.ReconcileDelete(context.Background(), "default", "job"); err != nil {
+		t.Fatalf("ReconcileDelete should succeed after transient retry, got: %v", err)
+	}
+	if len(mockSrv.deletedActors) != 2 {
+		t.Errorf("expected 2 delete attempts (1 blip + 1 success), got %d", len(mockSrv.deletedActors))
+	}
+}
+
+// TestReconcileDelete_RetriesTransientListTemplates pins the same retry on
+// the delete path's other head RPC: a blip on ListActorTemplates must not
+// abort cleanup.
+func TestReconcileDelete_RetriesTransientListTemplates(t *testing.T) {
+	mockSrv := &mockControlServer{
+		actorTemplates:    map[string]bool{"job-tmpl-0a1b2c3d": true},
+		listTemplatesErrs: []error{status.Error(codes.Unavailable, "control plane blip")},
+	}
+	reconciler, teardown := reconcileWithMock(t, mockSrv)
+	defer teardown()
+
+	if err := reconciler.ReconcileDelete(context.Background(), "default", "job"); err != nil {
+		t.Fatalf("ReconcileDelete should succeed after transient retry, got: %v", err)
+	}
+	if len(mockSrv.deletedTemplates) != 1 || mockSrv.deletedTemplates[0] != "job-tmpl-0a1b2c3d" {
+		t.Errorf("expected template cleanup after retry, got %v", mockSrv.deletedTemplates)
 	}
 }

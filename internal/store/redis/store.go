@@ -210,8 +210,13 @@ func (s *Store) ListTasks(ctx context.Context, atespace string, limit, offset in
 	if limit <= 0 {
 		limit = 50
 	}
+	// A negative start counts from the tail in ZREVRANGE (usually an empty
+	// page); the memory store clamps to the head, so mirror it here.
 	start := offset
-	stop := offset + limit - 1
+	if start < 0 {
+		start = 0
+	}
+	stop := start + limit - 1
 
 	var members []string
 	var err error
@@ -269,6 +274,11 @@ func (s *Store) ListTasks(ctx context.Context, atespace string, limit, offset in
 
 // UpdateTaskStatus updates only the status portion of a task.
 func (s *Store) UpdateTaskStatus(ctx context.Context, atespace, name string, status *v1alpha1.TaskStatus) error {
+	// GetTask folds "" to "default"; normalize here too so the write lands on
+	// the same canonical key instead of orphaning ax:task::<name>.
+	if atespace == "" {
+		atespace = "default"
+	}
 	task, err := s.GetTask(ctx, atespace, name)
 	if err != nil {
 		return err

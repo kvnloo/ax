@@ -145,6 +145,11 @@ func (s *MemoryStore) ListTasks(ctx context.Context, atespace string, limit, off
 	if offset >= int64(len(result)) {
 		return []*v1alpha1.Task{}, nil
 	}
+	// A negative offset counts from the tail in Redis's ZREVRANGE; clamp to
+	// the head here so both backends agree on the same interface call.
+	if offset < 0 {
+		offset = 0
+	}
 	end := offset + limit
 	if limit <= 0 || end > int64(len(result)) {
 		end = int64(len(result))

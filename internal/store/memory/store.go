@@ -98,11 +98,13 @@ func (s *MemoryStore) SaveTask(ctx context.Context, task *v1alpha1.Task) error {
 		Action:   "reconcile",
 	}
 
-	// Notify watchers
+	// Notify watchers with a private copy each. The stored record must never be
+	// shared with callers: a watcher mutating the task it receives would
+	// otherwise rewrite the store's internal state (and race with it).
 	if chs, ok := s.watchers[key]; ok {
 		for _, ch := range chs {
 			select {
-			case ch <- cp:
+			case ch <- clone(cp):
 			default:
 			}
 		}

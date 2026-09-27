@@ -100,12 +100,20 @@ func main() {
 	// Commands that don't require an AX server connection
 	switch cmd {
 	case "version":
+		if err := validateNoArgs(cleanArgs, "version"); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 		fmt.Println("ax version v1alpha1 (standalone redis engine)")
 		return
 	case "help", "-h", "--help":
 		printUsage()
 		return
 	case "ctx", "context":
+		if err := validateNoArgs(cleanArgs, "ctx"); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 		if err := runContext(kubeContext); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -157,6 +165,16 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// validateNoArgs rejects positional args for commands that take none (version,
+// ctx). Flags parsed earlier (e.g. --context) never reach cleanArgs, so any
+// token here is a genuine extra arg.
+func validateNoArgs(args []string, cmdName string) error {
+	if len(args) > 0 {
+		return fmt.Errorf("usage: ax %s (takes no arguments)", cmdName)
+	}
+	return nil
 }
 
 func printUsage() {

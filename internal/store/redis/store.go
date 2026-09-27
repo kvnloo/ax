@@ -32,6 +32,12 @@ const (
 	defaultStreamName    = "ax:stream:tasks"
 	defaultReadBatchSize = 10
 	defaultReadBlock     = 2 * time.Second
+	// streamMaxLen caps the task event stream. Consumers acknowledge
+	// deliveries out of the pending list but entries are never deleted,
+	// so an uncapped stream grows (and leaks Redis memory) for the life
+	// of the deployment. Trimming is approximate, keeping the amortized
+	// cost near O(1) per add.
+	streamMaxLen = 10000
 )
 
 var (
@@ -168,14 +174,7 @@ func (s *Store) SaveTask(ctx context.Context, task *v1alpha1.Task) error {
 	pipe.Set(ctx, s.taskKey(atespace, name), data, s.opts.TTL)
 	pipe.ZAdd(ctx, s.taskIndexKey(), redis.Z{Score: score, Member: member})
 	pipe.ZAdd(ctx, s.taskAtespaceIndexKey(atespace), redis.Z{Score: score, Member: name})
-	pipe.XAdd(ctx, &redis.XAddArgs{
-		Stream: s.opts.StreamName,
-		Values: map[string]interface{}{
-			"action":   "reconcile",
-			"atespace": atespace,
-			"name":     name,
-		},
-	})
+	pipe.XAdd(ctx, streamEventArgs(s.opts.StreamName, "reconcile", atespace, name))
 	pipe.Publish(ctx, s.taskPubSubChannel(atespace, name), data)
 
 	_, err = pipe.Exec(ctx)
@@ -312,18 +311,31 @@ func (s *Store) MarkTaskDeleting(ctx context.Context, atespace, name string) err
 	pipe := s.client.TxPipeline()
 	pipe.Set(ctx, s.taskKey(atespace, name), data, s.opts.TTL)
 	pipe.Publish(ctx, s.taskPubSubChannel(atespace, name), data)
-	pipe.XAdd(ctx, &redis.XAddArgs{
-		Stream: s.opts.StreamName,
-		Values: map[string]interface{}{
-			"action":   "delete",
-			"atespace": atespace,
-			"name":     name,
-		},
-	})
+	pipe.XAdd(ctx, streamEventArgs(s.opts.StreamName, "delete", atespace, name))
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("marking task deleting in redis: %w", err)
 	}
 	return nil
+}
+
+// streamEventArgs builds the XAdd arguments for one task event. The stream is
+// capped with approximate MAXLEN trimming: every SaveTask and MarkTaskDeleting
+// appends an entry, consumers never delete entries, and the memory store's
+// event channel is already bounded, so an uncapped Redis stream would grow for
+// the life of the deployment. Events are consumed at-least-once and reconcile
+// is level-triggered, so losing only long-undelivered tail entries under
+// extreme backlog is the safe trade for bounded memory.
+func streamEventArgs(stream, action, atespace, name string) *redis.XAddArgs {
+	return &redis.XAddArgs{
+		Stream: stream,
+		MaxLen: streamMaxLen,
+		Approx: true,
+		Values: map[string]interface{}{
+			"action":   action,
+			"atespace": atespace,
+			"name":     name,
+		},
+	}
 }
 
 // DeleteTask removes the task record and its index entries. No event is published.

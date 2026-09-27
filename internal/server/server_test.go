@@ -303,3 +303,37 @@ func TestUpdateTask_ValidatesWorkspaceBindings(t *testing.T) {
 		t.Fatalf("expected a valid multi-workspace task to be accepted, got %v", err)
 	}
 }
+
+// An Update with an empty resource name is a client error, not an internal
+// one: the stores reject nameless saves, which the RPCs used to surface as
+// codes.Internal after a wasted metadata roundtrip.
+func TestUpdateRPCs_RejectEmptyName(t *testing.T) {
+	srv := server.NewServer(memory.NewStore())
+	ctx := context.Background()
+	cases := []struct {
+		name string
+		call func(context.Context) error
+	}{
+		{"task", func(ctx context.Context) error {
+			_, err := srv.UpdateTask(ctx, &v1alpha1.UpdateTaskRequest{Task: &v1alpha1.Task{Metadata: &v1alpha1.ObjectMeta{}}})
+			return err
+		}},
+		{"gateway", func(ctx context.Context) error {
+			_, err := srv.UpdateGateway(ctx, &v1alpha1.UpdateGatewayRequest{Gateway: &v1alpha1.Gateway{Metadata: &v1alpha1.ObjectMeta{}}})
+			return err
+		}},
+		{"workspace", func(ctx context.Context) error {
+			_, err := srv.UpdateWorkspace(ctx, &v1alpha1.UpdateWorkspaceRequest{Workspace: &v1alpha1.Workspace{Metadata: &v1alpha1.ObjectMeta{}}})
+			return err
+		}},
+		{"model", func(ctx context.Context) error {
+			_, err := srv.UpdateModel(ctx, &v1alpha1.UpdateModelRequest{Model: &v1alpha1.Model{Metadata: &v1alpha1.ObjectMeta{}}})
+			return err
+		}},
+	}
+	for _, tc := range cases {
+		if got := status.Code(tc.call(ctx)); got != codes.InvalidArgument {
+			t.Errorf("Update%s: expected InvalidArgument, got %v", tc.name, got)
+		}
+	}
+}

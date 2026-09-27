@@ -112,6 +112,9 @@ func (s *Server) UpdateTask(ctx context.Context, req *v1alpha1.UpdateTaskRequest
 	if req == nil || req.Task == nil {
 		return nil, status.Error(codes.InvalidArgument, "task required")
 	}
+	if req.Task.GetMetadata().GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "task name is required")
+	}
 	task := req.Task
 	if err := v1alpha1.ValidateTask(task); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -273,6 +276,9 @@ func (s *Server) UpdateGateway(ctx context.Context, req *v1alpha1.UpdateGatewayR
 	if req == nil || req.Gateway == nil {
 		return nil, status.Error(codes.InvalidArgument, "gateway required")
 	}
+	if req.Gateway.GetMetadata().GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "gateway name is required")
+	}
 	req.Gateway.Metadata = defaultMetadata(req.Gateway.Metadata, func(atespace, name string) *v1alpha1.ObjectMeta {
 		existing, err := s.store.GetGateway(ctx, atespace, name)
 		if err != nil {
@@ -336,6 +342,9 @@ func (s *Server) UpdateWorkspace(ctx context.Context, req *v1alpha1.UpdateWorksp
 	if req == nil || req.Workspace == nil {
 		return nil, status.Error(codes.InvalidArgument, "workspace required")
 	}
+	if req.Workspace.GetMetadata().GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "workspace name is required")
+	}
 	req.Workspace.Metadata = defaultMetadata(req.Workspace.Metadata, func(atespace, name string) *v1alpha1.ObjectMeta {
 		existing, err := s.store.GetWorkspace(ctx, atespace, name)
 		if err != nil {
@@ -398,6 +407,9 @@ func (s *Server) ListModels(ctx context.Context, req *v1alpha1.ListModelsRequest
 func (s *Server) UpdateModel(ctx context.Context, req *v1alpha1.UpdateModelRequest) (*v1alpha1.Model, error) {
 	if req == nil || req.Model == nil {
 		return nil, status.Error(codes.InvalidArgument, "model required")
+	}
+	if req.Model.GetMetadata().GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "model name is required")
 	}
 	req.Model.Metadata = defaultMetadata(req.Model.Metadata, func(atespace, name string) *v1alpha1.ObjectMeta {
 		existing, err := s.store.GetModel(ctx, atespace, name)

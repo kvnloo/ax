@@ -188,8 +188,8 @@ func TestTaskReconciler(t *testing.T) {
 			Egress: &v1alpha1.EgressConfig{
 				Allowlist: &v1alpha1.EgressAllowlist{
 					Hosts: []*v1alpha1.HostRule{
-						{Host: "api.anthropic.com", Port: 443},
-						{Host: "github.com", Port: 443},
+						{Host: "api.anthropic.com"},
+						{Host: "github.com"},
 					},
 				},
 			},
@@ -452,5 +452,85 @@ func TestReconcileDelete_RemovesActorAndTemplates(t *testing.T) {
 		if !mockSrv.actorTemplates[keep] {
 			t.Errorf("template %s should not have been deleted", keep)
 		}
+	}
+}
+
+// TestTaskReconciler_EgressPortPinnedRejected verifies that a gateway allowlist
+// pinning a port is rejected loudly instead of being silently widened to all
+// ports: no egress policy is applied and the GatewayReady condition reports
+// PolicyApplyFailed while the task still proceeds to Running.
+func TestTaskReconciler_EgressPortPinnedRejected(t *testing.T) {
+	ctx := context.Background()
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer lis.Close()
+
+	mockSrv := &mockControlServer{}
+	grpcServer := grpc.NewServer()
+	ateapipb.RegisterControlServer(grpcServer, mockSrv)
+	go grpcServer.Serve(lis)
+	defer grpcServer.Stop()
+
+	client, err := substrate.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("failed to create substrate client: %v", err)
+	}
+	defer client.Close()
+
+	reconciler := controller.NewTaskReconciler(client, "test-template", "ax-system")
+	reconciler.SecretResolver = noSecrets
+	reconciler.WorkspaceReadyTimeout = 200 * time.Millisecond
+
+	task := &v1alpha1.Task{
+		ApiVersion: v1alpha1.APIVersion,
+		Kind:       v1alpha1.KindTask,
+		Metadata: &v1alpha1.ObjectMeta{
+			Name:     "port-task",
+			Atespace: "default",
+		},
+		Spec: &v1alpha1.TaskSpec{
+			Image:   "ghrc.io/my-org/my-image",
+			Command: []string{"/bin/task-runner"},
+			Gateway: &v1alpha1.GatewayRef{Name: "default-gateway"},
+		},
+		Status: &v1alpha1.TaskStatus{},
+	}
+
+	gateway := &v1alpha1.Gateway{
+		Spec: &v1alpha1.GatewaySpec{
+			Egress: &v1alpha1.EgressConfig{
+				Allowlist: &v1alpha1.EgressAllowlist{
+					Hosts: []*v1alpha1.HostRule{{Host: "db.internal", Port: 5432}},
+				},
+			},
+		},
+	}
+
+	reconciled, err := reconciler.Reconcile(ctx, task, gateway)
+	if err != nil {
+		t.Fatalf("Reconcile failed: %v", err)
+	}
+
+	if reconciled.Status.Phase != "Running" {
+		t.Errorf("expected phase 'Running', got %q", reconciled.Status.Phase)
+	}
+	if len(mockSrv.createdPolicies) != 0 {
+		t.Errorf("expected no egress policy to be applied, got %v", mockSrv.createdPolicies)
+	}
+
+	found := false
+	for _, c := range reconciled.Status.Conditions {
+		if c.Type == "GatewayReady" {
+			found = true
+			if c.Status != "False" || c.Reason != "PolicyApplyFailed" {
+				t.Errorf("expected GatewayReady=False/PolicyApplyFailed, got %s/%s", c.Status, c.Reason)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected a GatewayReady condition on the reconciled task")
 	}
 }

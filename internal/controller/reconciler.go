@@ -190,10 +190,12 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, gat
 	if gateway != nil && gateway.Spec != nil && gateway.Spec.Egress != nil && gateway.Spec.Egress.Allowlist != nil {
 		egressAllowlist = gateway.Spec.Egress.Allowlist
 	} else {
-		// Default to allow all egress if no explicit gateway restriction is set
+		// Default to allow all egress if no explicit gateway restriction is set.
+		// The port is left unset: Substrate egress rules match on hostname or
+		// CIDR only, so a pinned port would be rejected as unenforceable.
 		egressAllowlist = &v1alpha1.EgressAllowlist{
 			Hosts: []*v1alpha1.HostRule{
-				{Host: "*", Port: 443},
+				{Host: "*"},
 			},
 		}
 	}

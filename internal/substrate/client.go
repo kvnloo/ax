@@ -446,17 +446,19 @@ func (c *Client) DeleteActorTemplate(ctx context.Context, atespace, templateName
 	return nil
 }
 
-// ApplyEgressPolicy applies egress rules to the Actor from a Gateway's allowlist.
-func (c *Client) ApplyEgressPolicy(ctx context.Context, atespace, actorName string, allowlist *v1alpha1.EgressAllowlist) error {
-	if allowlist == nil || len(allowlist.Hosts) == 0 {
-		return nil
-	}
-
+// egressRulesFromAllowlist translates an ax egress allowlist into Substrate
+// egress rules. The Substrate EgressRule API matches on hostname or CIDR only
+// and has no port field, so a HostRule that pins a port cannot be enforced:
+// returning an error is safer than silently widening the rule to all ports.
+func egressRulesFromAllowlist(allowlist *v1alpha1.EgressAllowlist) ([]*ateapipb.EgressRule, error) {
 	var patterns []string
 	var allowAll bool
 	var cidrs []string
 
 	for _, h := range allowlist.Hosts {
+		if h.Port != 0 {
+			return nil, fmt.Errorf("egress host rule for %q pins port %d, which the Substrate egress API cannot enforce", h.Host, h.Port)
+		}
 		if h.Host == "*" || h.Host == "0.0.0.0/0" {
 			allowAll = true
 			break
@@ -489,6 +491,19 @@ func (c *Client) ApplyEgressPolicy(ctx context.Context, atespace, actorName stri
 			})
 		}
 	}
+	return rules, nil
+}
+
+// ApplyEgressPolicy applies egress rules to the Actor from a Gateway's allowlist.
+func (c *Client) ApplyEgressPolicy(ctx context.Context, atespace, actorName string, allowlist *v1alpha1.EgressAllowlist) error {
+	if allowlist == nil || len(allowlist.Hosts) == 0 {
+		return nil
+	}
+
+	rules, err := egressRulesFromAllowlist(allowlist)
+	if err != nil {
+		return err
+	}
 
 	egressPolicy := &ateapipb.EgressPolicy{
 		Metadata: &ateapipb.ResourceMetadata{
@@ -508,7 +523,7 @@ func (c *Client) ApplyEgressPolicy(ctx context.Context, atespace, actorName stri
 		Actor:        actorRef,
 		EgressPolicy: egressPolicy,
 	}
-	_, err := c.control.CreateActorEgressPolicy(ctx, createReq)
+	_, err = c.control.CreateActorEgressPolicy(ctx, createReq)
 	if err != nil {
 		if status.Code(err) == codes.AlreadyExists {
 			existing, getErr := c.control.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{

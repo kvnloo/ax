@@ -26,6 +26,23 @@ var (
 	ErrNotFound = errors.New("resource not found")
 )
 
+// MaxListPageSize caps a ListTasks page. List requests carry a client-controlled
+// int64 limit; without a cap, offset+limit can overflow int64 and turn the
+// range end negative (a slice-bounds panic in the memory store, a wrong empty
+// page from Redis), and a single request could ask the store to materialize an
+// unbounded page.
+const MaxListPageSize = 10000
+
+// ClampListLimit bounds a ListTasks limit to at most MaxListPageSize. It only
+// ever lowers the ceiling, never raises the floor, so each store keeps its own
+// treatment of non-positive limits.
+func ClampListLimit(limit int64) int64 {
+	if limit > MaxListPageSize {
+		return MaxListPageSize
+	}
+	return limit
+}
+
 // TaskEvent represents an event published to the task event stream.
 type TaskEvent struct {
 	ID       string

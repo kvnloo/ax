@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"time"
 
@@ -210,8 +211,15 @@ func (s *Store) ListTasks(ctx context.Context, atespace string, limit, offset in
 	if limit <= 0 {
 		limit = 50
 	}
+	limit = store.ClampListLimit(limit)
 	start := offset
 	stop := offset + limit - 1
+	if stop < offset {
+		// The addition overflowed int64; saturate to the end of the index
+		// instead of sending Redis a negative stop (which it normalizes to
+		// an empty page).
+		stop = math.MaxInt64
+	}
 
 	var members []string
 	var err error

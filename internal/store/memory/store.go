@@ -145,8 +145,11 @@ func (s *MemoryStore) ListTasks(ctx context.Context, atespace string, limit, off
 	if offset >= int64(len(result)) {
 		return []*v1alpha1.Task{}, nil
 	}
+	limit = store.ClampListLimit(limit)
 	end := offset + limit
-	if limit <= 0 || end > int64(len(result)) {
+	// end < offset means the addition overflowed int64; fall through to the
+	// full tail instead of panicking on a negative slice bound.
+	if limit <= 0 || end > int64(len(result)) || end < offset {
 		end = int64(len(result))
 	}
 	return result[offset:end], nil

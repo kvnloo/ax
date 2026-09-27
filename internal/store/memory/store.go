@@ -163,9 +163,12 @@ func (s *MemoryStore) UpdateTaskStatus(ctx context.Context, atespace, name strin
 		return store.ErrNotFound
 	}
 	t.Status = status
-	cp := clone(t)
 
-	if chs, ok := s.watchers[key]; ok {
+	// The clone exists only for watcher delivery. With no watchers registered
+	// for this task it is pure overhead on the reconcile hot path (this runs
+	// after every worker reconcile), so skip it.
+	if chs := s.watchers[key]; len(chs) > 0 {
+		cp := clone(t)
 		for _, ch := range chs {
 			select {
 			case ch <- cp:
@@ -189,8 +192,10 @@ func (s *MemoryStore) MarkTaskDeleting(ctx context.Context, atespace, name strin
 		t.Status = &v1alpha1.TaskStatus{}
 	}
 	t.Status.Phase = v1alpha1.PhaseTerminating
-	cp := clone(t)
-	if chs, ok := s.watchers[key]; ok {
+	// The clone exists only for watcher delivery; skip it when nobody is
+	// watching this task (see UpdateTaskStatus).
+	if chs := s.watchers[key]; len(chs) > 0 {
+		cp := clone(t)
 		for _, ch := range chs {
 			select {
 			case ch <- cp:

@@ -736,6 +736,11 @@ func (s *Store) Subscribe(ctx context.Context, group, consumer string) (store.Su
 	return &subscription{store: s, group: group, consumer: consumer}, nil
 }
 
+// closerFunc adapts a function to io.Closer.
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
+
 // subscription reads from a consumer group in batches and hands events out one
 // at a time. Delivery is at-least-once: an event stays in the group's pending
 // list until Ack is called for it.
@@ -828,18 +833,37 @@ func (s *Store) WatchTask(ctx context.Context, atespace, name string) (<-chan *v
 	}
 
 	ch := make(chan *v1alpha1.Task, 10)
+	done := make(chan struct{})
 	go func() {
 		defer close(ch)
 		msgCh := pubsub.Channel()
-		for msg := range msgCh {
-			var t v1alpha1.Task
-			if err := jsonUnmarshalOpts.Unmarshal([]byte(msg.Payload), &t); err == nil {
-				ch <- &t
+		for {
+			select {
+			case <-done:
+				return
+			case msg, ok := <-msgCh:
+				if !ok {
+					return
+				}
+				var t v1alpha1.Task
+				if err := jsonUnmarshalOpts.Unmarshal([]byte(msg.Payload), &t); err == nil {
+					// Never block forever: a consumer that stopped reading
+					// must not wedge this goroutine past closer.Close().
+					select {
+					case ch <- &t:
+					case <-done:
+						return
+					}
+				}
 			}
 		}
 	}()
 
-	return ch, pubsub, nil
+	closer := closerFunc(func() error {
+		close(done)
+		return pubsub.Close()
+	})
+	return ch, closer, nil
 }
 
 // Close closes the underlying Redis client connection.

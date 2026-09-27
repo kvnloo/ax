@@ -904,17 +904,27 @@ func waitForDeletion(ctx context.Context, client v1alpha1.AXClient, kind, atespa
 	}
 
 	announced := false
+	announce := func() {
+		if !announced {
+			fmt.Fprintf(os.Stderr, "waiting for %s %s/%s to be deleted...\n", strings.ToLower(kind), atespace, name)
+			announced = true
+		}
+	}
 	for {
 		err := lookup()
 		if status.Code(err) == codes.NotFound {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("checking %s %s/%s after delete: %w", strings.ToLower(kind), atespace, name, err)
-		}
-		if !announced {
-			fmt.Fprintf(os.Stderr, "waiting for %s %s/%s to be deleted...\n", strings.ToLower(kind), atespace, name)
-			announced = true
+			if !isTransientLookupError(err) {
+				return fmt.Errorf("checking %s %s/%s after delete: %w", strings.ToLower(kind), atespace, name, err)
+			}
+			// Transient failure (network blip, server restart): the delete
+			// itself already succeeded, so keep waiting for NotFound rather
+			// than reporting a failure the user cannot act on.
+			announce()
+		} else {
+			announce()
 		}
 		select {
 		case <-ctx.Done():
@@ -922,6 +932,17 @@ func waitForDeletion(ctx context.Context, client v1alpha1.AXClient, kind, atespa
 		case <-time.After(deletePollInterval):
 		}
 	}
+}
+
+// isTransientLookupError reports whether a lookup failure is worth retrying:
+// the statuses a read returns while the server is momentarily unreachable
+// (network blip, rolling restart). Anything else aborts the wait immediately.
+func isTransientLookupError(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Aborted, codes.ResourceExhausted:
+		return true
+	}
+	return false
 }
 
 // normalizeKind maps user-typed kinds ("task", "tasks", "Task") to the canonical

@@ -200,6 +200,11 @@ func (s *MemoryStore) MarkTaskDeleting(ctx context.Context, atespace, name strin
 	}
 	s.mu.Unlock()
 
+	// Publish the delete event. Block until a consumer takes it rather
+	// than silently dropping it: a dropped delete event leaves the task
+	// stuck in Terminating forever (the worker never learns to tear it
+	// down), so `ax delete` hangs until its context expires. Caller
+	// cancellation aborts the wait.
 	select {
 	case s.events <- store.TaskEvent{
 		ID:       fmt.Sprintf("%d", time.Now().UnixNano()),
@@ -207,7 +212,8 @@ func (s *MemoryStore) MarkTaskDeleting(ctx context.Context, atespace, name strin
 		Name:     name,
 		Action:   "delete",
 	}:
-	default:
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 	return nil
 }

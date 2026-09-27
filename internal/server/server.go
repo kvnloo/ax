@@ -230,7 +230,7 @@ func (s *Server) WatchTask(req *v1alpha1.WatchTaskRequest, stream grpc.ServerStr
 			if err := stream.Send(&v1alpha1.WatchTaskResponse{Task: task, Action: "MODIFIED"}); err != nil {
 				return err
 			}
-			if task.Status != nil && (task.Status.Phase == "Running" || task.Status.Phase == "Failed" || task.Status.Phase == "Completed") {
+			if task.Status != nil && (task.Status.Phase == "Running" || task.Status.Phase == "Failed" || task.Status.Phase == "Completed" || task.Status.Phase == v1alpha1.PhaseTerminating) {
 				return nil
 			}
 		}

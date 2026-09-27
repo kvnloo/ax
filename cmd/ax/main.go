@@ -198,10 +198,15 @@ Flags:
   --server string             AX API server address (default: auto-detected from kube context or $AX_SERVER)`)
 }
 
+// axDialOptions are extra gRPC dial options for the CLI client. Tests
+// override it to route through an in-process server.
+var axDialOptions []grpc.DialOption
+
 func getAXClient(serverURL string) (v1alpha1.AXClient, *grpc.ClientConn, error) {
 	target := strings.TrimPrefix(serverURL, "http://")
 	target = strings.TrimPrefix(target, "https://")
-	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	opts := append([]grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}, axDialOptions...)
+	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("connecting to %s: %w", target, err)
 	}
@@ -353,7 +358,7 @@ func runGet(serverURL, atespace string, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if resource == "tasks" || resource == "task" && len(args) == 1 {
+	if (resource == "tasks" || resource == "task") && len(args) == 1 {
 		resp, err := client.ListTasks(ctx, &v1alpha1.ListTasksRequest{Atespace: atespace})
 		if err != nil {
 			return fmt.Errorf("listing tasks: %w", err)
@@ -412,7 +417,7 @@ func runGet(serverURL, atespace string, args []string) error {
 		return yaml.NewEncoder(os.Stdout).Encode(task)
 	}
 
-	if resource == "gateways" || resource == "gateway" && len(args) == 1 {
+	if (resource == "gateways" || resource == "gateway") && len(args) == 1 {
 		resp, err := client.ListGateways(ctx, &v1alpha1.ListGatewaysRequest{Atespace: atespace})
 		if err != nil {
 			return fmt.Errorf("listing gateways: %w", err)
@@ -471,7 +476,7 @@ func runGet(serverURL, atespace string, args []string) error {
 		return yaml.NewEncoder(os.Stdout).Encode(gw)
 	}
 
-	if resource == "workspaces" || resource == "workspace" && len(args) == 1 {
+	if (resource == "workspaces" || resource == "workspace") && len(args) == 1 {
 		resp, err := client.ListWorkspaces(ctx, &v1alpha1.ListWorkspacesRequest{Atespace: atespace})
 		if err != nil {
 			return fmt.Errorf("listing workspaces: %w", err)
@@ -516,7 +521,7 @@ func runGet(serverURL, atespace string, args []string) error {
 		return yaml.NewEncoder(os.Stdout).Encode(ws)
 	}
 
-	if resource == "models" || resource == "model" && len(args) == 1 {
+	if (resource == "models" || resource == "model") && len(args) == 1 {
 		resp, err := client.ListModels(ctx, &v1alpha1.ListModelsRequest{Atespace: atespace})
 		if err != nil {
 			return fmt.Errorf("listing models: %w", err)

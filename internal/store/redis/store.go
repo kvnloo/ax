@@ -285,6 +285,13 @@ func (s *Store) ListTasks(ctx context.Context, atespace string, limit, offset in
 
 // UpdateTaskStatus updates only the status portion of a task.
 func (s *Store) UpdateTaskStatus(ctx context.Context, atespace, name string, status *v1alpha1.TaskStatus) error {
+	// Normalize like every other task method: an empty atespace means
+	// "default". Without this the read (via GetTask) and the write below
+	// hit different keys — the update lands on an orphaned
+	// "ax:task::name" key and the next read returns the stale status.
+	if atespace == "" {
+		atespace = "default"
+	}
 	task, err := s.GetTask(ctx, atespace, name)
 	if err != nil {
 		return err

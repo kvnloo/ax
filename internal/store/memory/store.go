@@ -134,22 +134,28 @@ func (s *MemoryStore) ListTasks(ctx context.Context, atespace string, limit, off
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var result []*v1alpha1.Task
+	// Collect matches first, then clone only the returned page. Cloning every
+	// match before slicing did O(N) proto clones for an O(limit) result.
+	var matched []*v1alpha1.Task
 	for _, t := range s.tasks {
 		if atespace == "" || atespace == "*" || t.Metadata.Atespace == atespace {
-			cp := clone(t)
-			result = append(result, cp)
+			matched = append(matched, t)
 		}
 	}
 
-	if offset >= int64(len(result)) {
+	if offset >= int64(len(matched)) {
 		return []*v1alpha1.Task{}, nil
 	}
 	end := offset + limit
-	if limit <= 0 || end > int64(len(result)) {
-		end = int64(len(result))
+	if limit <= 0 || end > int64(len(matched)) {
+		end = int64(len(matched))
 	}
-	return result[offset:end], nil
+	page := matched[offset:end]
+	result := make([]*v1alpha1.Task, len(page))
+	for i, t := range page {
+		result[i] = clone(t)
+	}
+	return result, nil
 }
 
 func (s *MemoryStore) UpdateTaskStatus(ctx context.Context, atespace, name string, status *v1alpha1.TaskStatus) error {

@@ -337,12 +337,54 @@ func applyOutcome(lookupErr error, existingSpec, newSpec proto.Message) (string,
 	return "configured", nil
 }
 
-func runGet(serverURL, atespace string, args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("specify resource to get (e.g. 'ax get tasks' or 'ax get task <name>')")
-	}
+// getOp is the parsed form of `ax get` args: either list everything of a kind
+// or fetch one named resource.
+type getOp struct {
+	list bool
+	kind string // singular lowercase: task, gateway, workspace, model
+	name string
+}
 
-	resource := strings.ToLower(args[0])
+// parseGetArgs validates `ax get` arguments without touching the network so
+// bad input fails fast. It fixes two defects in the old inline conditions:
+// the && / || precedence trap made `ax get tasks foo` silently list all
+// tasks (the plural branch fired before the name was ever considered), and
+// `ax get task foo bar` silently dropped the extra arg.
+func parseGetArgs(args []string) (getOp, error) {
+	if len(args) == 0 {
+		return getOp{}, fmt.Errorf("specify resource to get (e.g. 'ax get tasks' or 'ax get task <name>')")
+	}
+	var kind string
+	switch strings.ToLower(args[0]) {
+	case "task", "tasks":
+		kind = "task"
+	case "gateway", "gateways":
+		kind = "gateway"
+	case "workspace", "workspaces":
+		kind = "workspace"
+	case "model", "models":
+		kind = "model"
+	default:
+		return getOp{}, fmt.Errorf("unknown resource %q", args[0])
+	}
+	plural := strings.ToLower(args[0]) == kind+"s"
+	switch {
+	case len(args) == 1:
+		return getOp{list: true, kind: kind}, nil
+	case len(args) == 2 && !plural:
+		return getOp{kind: kind, name: args[1]}, nil
+	case len(args) == 2:
+		return getOp{}, fmt.Errorf("usage: ax get %s takes no name (did you mean 'ax get %s <name>'?)", strings.ToLower(args[0]), kind)
+	default:
+		return getOp{}, fmt.Errorf("usage: ax get %s [<name>]", kind)
+	}
+}
+
+func runGet(serverURL, atespace string, args []string) error {
+	op, err := parseGetArgs(args)
+	if err != nil {
+		return err
+	}
 
 	client, conn, err := getAXClient(serverURL)
 	if err != nil {
@@ -353,7 +395,7 @@ func runGet(serverURL, atespace string, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if resource == "tasks" || resource == "task" && len(args) == 1 {
+	if op.kind == "task" && op.list {
 		resp, err := client.ListTasks(ctx, &v1alpha1.ListTasksRequest{Atespace: atespace})
 		if err != nil {
 			return fmt.Errorf("listing tasks: %w", err)
@@ -402,8 +444,8 @@ func runGet(serverURL, atespace string, args []string) error {
 		return w.Flush()
 	}
 
-	if (resource == "task" || resource == "tasks") && len(args) >= 2 {
-		name := args[1]
+	if op.kind == "task" && !op.list {
+		name := op.name
 		task, err := client.GetTask(ctx, &v1alpha1.GetTaskRequest{Atespace: atespace, Name: name})
 		if err != nil {
 			return fmt.Errorf("getting task %q: %w", name, err)
@@ -412,7 +454,7 @@ func runGet(serverURL, atespace string, args []string) error {
 		return yaml.NewEncoder(os.Stdout).Encode(task)
 	}
 
-	if resource == "gateways" || resource == "gateway" && len(args) == 1 {
+	if op.kind == "gateway" && op.list {
 		resp, err := client.ListGateways(ctx, &v1alpha1.ListGatewaysRequest{Atespace: atespace})
 		if err != nil {
 			return fmt.Errorf("listing gateways: %w", err)
@@ -461,8 +503,8 @@ func runGet(serverURL, atespace string, args []string) error {
 		return w.Flush()
 	}
 
-	if (resource == "gateway" || resource == "gateways") && len(args) >= 2 {
-		name := args[1]
+	if op.kind == "gateway" && !op.list {
+		name := op.name
 		gw, err := client.GetGateway(ctx, &v1alpha1.GetGatewayRequest{Atespace: atespace, Name: name})
 		if err != nil {
 			return fmt.Errorf("getting gateway %q: %w", name, err)
@@ -471,7 +513,7 @@ func runGet(serverURL, atespace string, args []string) error {
 		return yaml.NewEncoder(os.Stdout).Encode(gw)
 	}
 
-	if resource == "workspaces" || resource == "workspace" && len(args) == 1 {
+	if op.kind == "workspace" && op.list {
 		resp, err := client.ListWorkspaces(ctx, &v1alpha1.ListWorkspacesRequest{Atespace: atespace})
 		if err != nil {
 			return fmt.Errorf("listing workspaces: %w", err)
@@ -506,8 +548,8 @@ func runGet(serverURL, atespace string, args []string) error {
 		return w.Flush()
 	}
 
-	if (resource == "workspace" || resource == "workspaces") && len(args) >= 2 {
-		name := args[1]
+	if op.kind == "workspace" && !op.list {
+		name := op.name
 		ws, err := client.GetWorkspace(ctx, &v1alpha1.GetWorkspaceRequest{Atespace: atespace, Name: name})
 		if err != nil {
 			return fmt.Errorf("getting workspace %q: %w", name, err)
@@ -516,7 +558,7 @@ func runGet(serverURL, atespace string, args []string) error {
 		return yaml.NewEncoder(os.Stdout).Encode(ws)
 	}
 
-	if resource == "models" || resource == "model" && len(args) == 1 {
+	if op.kind == "model" && op.list {
 		resp, err := client.ListModels(ctx, &v1alpha1.ListModelsRequest{Atespace: atespace})
 		if err != nil {
 			return fmt.Errorf("listing models: %w", err)
@@ -549,8 +591,8 @@ func runGet(serverURL, atespace string, args []string) error {
 		return w.Flush()
 	}
 
-	if (resource == "model" || resource == "models") && len(args) >= 2 {
-		name := args[1]
+	if op.kind == "model" && !op.list {
+		name := op.name
 		m, err := client.GetModel(ctx, &v1alpha1.GetModelRequest{Atespace: atespace, Name: name})
 		if err != nil {
 			return fmt.Errorf("getting model %q: %w", name, err)
@@ -559,7 +601,8 @@ func runGet(serverURL, atespace string, args []string) error {
 		return yaml.NewEncoder(os.Stdout).Encode(m)
 	}
 
-	return fmt.Errorf("unknown resource %q", resource)
+	// Unreachable: parseGetArgs guarantees a valid kind and mode.
+	return nil
 }
 
 func runDescribe(serverURL, atespace string, args []string) error {

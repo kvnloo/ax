@@ -562,12 +562,28 @@ func runGet(serverURL, atespace string, args []string) error {
 	return fmt.Errorf("unknown resource %q", resource)
 }
 
-func runDescribe(serverURL, atespace string, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: ax describe <task|gateway|workspace|model> <name>")
+// parseDescribeArgs validates `ax describe` args before dialing: unknown kinds
+// used to fall through to a task lookup (e.g. `ax describe frobnicate x`
+// described task "x"), and extra args were silently dropped. The returned
+// kind keeps the caller's original singular/plural spelling so runDescribe's
+// existing comparisons are unchanged.
+func parseDescribeArgs(args []string) (kind, name string, err error) {
+	if len(args) != 2 {
+		return "", "", fmt.Errorf("usage: ax describe <task|gateway|workspace|model> <name>")
 	}
-	kind := strings.ToLower(args[0])
-	name := args[1]
+	switch k := strings.ToLower(args[0]); k {
+	case "task", "tasks", "gateway", "gateways", "workspace", "workspaces", "model", "models":
+		return k, args[1], nil
+	default:
+		return "", "", fmt.Errorf("unknown kind %q (expected task, gateway, workspace, or model)", args[0])
+	}
+}
+
+func runDescribe(serverURL, atespace string, args []string) error {
+	kind, name, err := parseDescribeArgs(args)
+	if err != nil {
+		return err
+	}
 
 	client, conn, err := getAXClient(serverURL)
 	if err != nil {

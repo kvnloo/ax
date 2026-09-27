@@ -166,7 +166,7 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, gat
 	// If a custom image, workspace, or extra environment is specified, provision or use a dedicated ActorTemplate
 	if task.Spec != nil && (task.Spec.Image != "" || len(extraEnv) > 0) {
 		slog.Info("ensuring custom ActorTemplate for task", "image", task.Spec.Image)
-		customTemplateName := taskTemplateName(task.Metadata.Name, task.Spec.Image, extraEnv)
+		customTemplateName := taskTemplateName(task.Metadata.Name, task.Spec.Image, templateEnvForDigest(task, extraEnv))
 
 		tmpl, err := r.client.EnsureActorTemplateWithImage(ctx, templateAtespace, templateName, atespace, customTemplateName, task.Spec.Image, extraEnv)
 		if err != nil {
@@ -404,6 +404,22 @@ func taskTemplateName(taskName, image string, env map[string]string) string {
 // for the given task, across all spec revisions.
 func taskTemplatePattern(taskName string) *regexp.Regexp {
 	return regexp.MustCompile(fmt.Sprintf("^%s-tmpl-[0-9a-f]{%d}$", regexp.QuoteMeta(taskName), 2*templateDigestBytes))
+}
+
+// templateEnvForDigest returns the environment map whose digest names a task's
+// ActorTemplate. AX_TASK_YAML embeds the full task including status, whose
+// condition timestamps change on every reconcile; digesting the spec alone keeps
+// the template name stable across reconciles, so a new template is only minted
+// when the task's desired state actually changes.
+func templateEnvForDigest(task *v1alpha1.Task, extraEnv map[string]string) map[string]string {
+	digestEnv := make(map[string]string, len(extraEnv))
+	for k, v := range extraEnv {
+		digestEnv[k] = v
+	}
+	if specYAML, err := yaml.Marshal(task.Spec); err == nil {
+		digestEnv["AX_TASK_YAML"] = string(specYAML)
+	}
+	return digestEnv
 }
 
 // ReconcileDelete cleans up Substrate resources when a Task is deleted: the actor,

@@ -41,6 +41,12 @@ type fakeRedis struct {
 	mu   sync.Mutex
 	data map[string]string
 	sets []string // keys SET (in order), including inside MULTI/EXEC
+	// zrevrange records ZREVRANGE calls (in order) for range-arg assertions.
+	zrevrange []zrangeArgs
+}
+
+type zrangeArgs struct {
+	key, start, stop string
 }
 
 func newFakeRedis(t *testing.T) *fakeRedis {
@@ -138,6 +144,13 @@ func (f *fakeRedis) handle(c net.Conn) {
 			} else {
 				fmt.Fprintf(c, "$%d\r\n%s\r\n", len(v), v)
 			}
+		case cmd == "ZREVRANGE":
+			// Record the range args; the index is empty in this test, so
+			// there is nothing to return.
+			f.mu.Lock()
+			f.zrevrange = append(f.zrevrange, zrangeArgs{key: args[1], start: args[2], stop: args[3]})
+			f.mu.Unlock()
+			fmt.Fprint(c, "*0\r\n")
 		case cmd == "SET":
 			f.set(args[1], args[2])
 			fmt.Fprint(c, "+OK\r\n")
@@ -223,5 +236,31 @@ func TestUpdateTaskStatusEmptyAtespaceWritesNormalizedKey(t *testing.T) {
 	}
 	if f.has("ax:task::t1") {
 		t.Fatal("orphaned key ax:task::t1 exists: write went to the raw atespace instead of default")
+	}
+}
+
+// TestListTasksNegativeOffsetClampedToHead pins the paging contract both
+// backends share: a negative offset means the head of the list, not
+// Redis's from-the-end indexing. The memory store clamps offset<0 to 0;
+// the Redis store passed it straight to ZRevRange, where start=-1 counts
+// from the tail (and usually yields an empty page when start > stop).
+func TestListTasksNegativeOffsetClampedToHead(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeRedis(t)
+	client := redis.NewClient(&redis.Options{Addr: f.addr()})
+	defer client.Close()
+	st := NewStore(client, Options{})
+
+	if _, err := st.ListTasks(ctx, "", 50, -1); err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.zrevrange) != 1 {
+		t.Fatalf("got %d ZREVRANGE calls, want 1", len(f.zrevrange))
+	}
+	if got := f.zrevrange[0].start; got != "0" {
+		t.Fatalf("ZREVRANGE start = %q, want 0 (negative offset must clamp to the head)", got)
 	}
 }

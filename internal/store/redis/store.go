@@ -226,6 +226,11 @@ func (s *Store) ListTasks(ctx context.Context, atespace string, limit, offset in
 	if limit <= 0 {
 		limit = 50
 	}
+	// Negative offsets are nonsense — they mean the head of the list, not
+	// Redis's from-the-end indexing (memory store parity: it clamps too).
+	if offset < 0 {
+		offset = 0
+	}
 	start := offset
 	stop := offset + limit - 1
 

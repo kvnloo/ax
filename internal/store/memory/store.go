@@ -162,7 +162,8 @@ func (s *MemoryStore) UpdateTaskStatus(ctx context.Context, atespace, name strin
 	if !ok {
 		return store.ErrNotFound
 	}
-	t.Status = status
+	// Deep-copy: the store must never share the caller's object.
+	t.Status = clone(status)
 	cp := clone(t)
 
 	if chs, ok := s.watchers[key]; ok {

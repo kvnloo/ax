@@ -1196,15 +1196,9 @@ func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 		}
 	} else {
 		// 2. Connect via the Substrate atenet-router service in ate-system (port 80)
-		localPort, pfCleanup, err := tunnel.PortForward(context.Background(), kubeContext, "ate-system", "svc/atenet-router", 80)
+		guestClient, cleanup, err = dialGuestViaRouter(kubeContext, targetActor, tunnel.PortForward, guest.DialTarget)
 		if err != nil {
-			return fmt.Errorf("establishing port-forward to atenet-router: %w", err)
-		}
-		cleanup = pfCleanup
-		routerEndpoint := fmt.Sprintf("127.0.0.1:%d", localPort)
-		guestClient, err = guest.DialTarget(routerEndpoint, targetActor)
-		if err != nil {
-			return fmt.Errorf("connecting to guest via atenet-router at %s: %w", routerEndpoint, err)
+			return err
 		}
 	}
 
@@ -1223,8 +1217,36 @@ func runSSH(serverURL, atespace, kubeContext string, args []string) error {
 	}
 
 	if exitCode != 0 {
+		// os.Exit skips deferred calls, so release the port-forward explicitly;
+		// otherwise the kubectl child keeps running and holds the local port.
+		guestClient.Close()
+		if cleanup != nil {
+			cleanup()
+		}
 		os.Exit(exitCode)
 	}
 
 	return nil
+}
+
+// dialGuestViaRouter establishes a port-forward to the Substrate atenet-router
+// service and dials the guest daemon through it. It returns the connected client
+// and a cleanup releasing the port-forward. If dialing fails, the port-forward
+// is released before returning: the kubectl child runs in its own process group
+// and would otherwise be orphaned, holding the local port forever.
+func dialGuestViaRouter(kubeContext, targetActor string,
+	portForward func(ctx context.Context, kubeContext, namespace, targetResource string, remotePort int) (int, func(), error),
+	dialTarget func(target, targetActor string) (*guest.Client, error),
+) (*guest.Client, func(), error) {
+	localPort, cleanup, err := portForward(context.Background(), kubeContext, "ate-system", "svc/atenet-router", 80)
+	if err != nil {
+		return nil, nil, fmt.Errorf("establishing port-forward to atenet-router: %w", err)
+	}
+	routerEndpoint := fmt.Sprintf("127.0.0.1:%d", localPort)
+	client, err := dialTarget(routerEndpoint, targetActor)
+	if err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("connecting to guest via atenet-router at %s: %w", routerEndpoint, err)
+	}
+	return client, cleanup, nil
 }

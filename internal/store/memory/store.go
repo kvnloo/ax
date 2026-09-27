@@ -162,6 +162,14 @@ func (s *MemoryStore) UpdateTaskStatus(ctx context.Context, atespace, name strin
 	if !ok {
 		return store.ErrNotFound
 	}
+
+	// Keep the store's invariant that Status is never nil: SaveTask defaults
+	// it, so a nil update must not reintroduce a nil that would panic the
+	// next consumer (e.g. the worker's `task.Status.Phase` write on the
+	// reconcile-error path).
+	if status == nil {
+		status = &v1alpha1.TaskStatus{}
+	}
 	t.Status = status
 	cp := clone(t)
 

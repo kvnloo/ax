@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -268,10 +269,9 @@ func ValidateTask(t *Task) error {
 		if r.GetPath() != "" && !strings.HasPrefix(r.GetPath(), "/") {
 			return fmt.Errorf("%s: path %q must be absolute", field, r.GetPath())
 		}
-		p := strings.TrimRight(paths[i], "/")
-		if p == "" {
-			p = "/"
-		}
+		// Paths are compared after cleaning so that lexically different spellings
+		// of the same mount point ("/a/./b" vs "/a/b") still collide.
+		p := filepath.Clean(paths[i])
 		if other, dup := seen[p]; dup {
 			return fmt.Errorf("%s: path %q is already used by workspace %q", field, paths[i], other)
 		}

@@ -386,6 +386,10 @@ func (s *Store) DeleteGateway(ctx context.Context, atespace, name string) error 
 	}
 	member := fmt.Sprintf("%s:%s", atespace, name)
 
+	if _, err := s.GetGateway(ctx, atespace, name); err != nil {
+		return err
+	}
+
 	pipe := s.client.TxPipeline()
 	pipe.Del(ctx, s.gwKey(atespace, name))
 	pipe.ZRem(ctx, s.gwIndexKey(), member)
@@ -513,6 +517,10 @@ func (s *Store) DeleteModel(ctx context.Context, atespace, name string) error {
 	}
 	member := fmt.Sprintf("%s:%s", atespace, name)
 
+	if _, err := s.GetModel(ctx, atespace, name); err != nil {
+		return err
+	}
+
 	pipe := s.client.TxPipeline()
 	pipe.Del(ctx, s.modelKey(atespace, name))
 	pipe.ZRem(ctx, s.modelIndexKey(), member)
@@ -639,6 +647,10 @@ func (s *Store) DeleteWorkspace(ctx context.Context, atespace, name string) erro
 		atespace = "default"
 	}
 	member := fmt.Sprintf("%s:%s", atespace, name)
+
+	if _, err := s.GetWorkspace(ctx, atespace, name); err != nil {
+		return err
+	}
 
 	pipe := s.client.TxPipeline()
 	pipe.Del(ctx, s.wsKey(atespace, name))

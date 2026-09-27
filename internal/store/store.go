@@ -73,16 +73,22 @@ type Store interface {
 	SaveGateway(ctx context.Context, gw *v1alpha1.Gateway) error
 	GetGateway(ctx context.Context, atespace, name string) (*v1alpha1.Gateway, error)
 	ListGateways(ctx context.Context, atespace string) ([]*v1alpha1.Gateway, error)
+	// DeleteGateway removes the gateway record. Returns ErrNotFound if the
+	// gateway does not exist.
 	DeleteGateway(ctx context.Context, atespace, name string) error
 
 	SaveWorkspace(ctx context.Context, ws *v1alpha1.Workspace) error
 	GetWorkspace(ctx context.Context, atespace, name string) (*v1alpha1.Workspace, error)
 	ListWorkspaces(ctx context.Context, atespace string) ([]*v1alpha1.Workspace, error)
+	// DeleteWorkspace removes the workspace record. Returns ErrNotFound if the
+	// workspace does not exist.
 	DeleteWorkspace(ctx context.Context, atespace, name string) error
 
 	SaveModel(ctx context.Context, model *v1alpha1.Model) error
 	GetModel(ctx context.Context, atespace, name string) (*v1alpha1.Model, error)
 	ListModels(ctx context.Context, atespace string) ([]*v1alpha1.Model, error)
+	// DeleteModel removes the model record. Returns ErrNotFound if the model
+	// does not exist.
 	DeleteModel(ctx context.Context, atespace, name string) error
 
 	WatchTask(ctx context.Context, atespace, name string) (<-chan *v1alpha1.Task, io.Closer, error)

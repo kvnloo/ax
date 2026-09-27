@@ -295,6 +295,9 @@ func (s *Server) DeleteGateway(ctx context.Context, req *v1alpha1.DeleteGatewayR
 		atespace = "default"
 	}
 	if err := s.store.DeleteGateway(ctx, atespace, req.Name); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "gateway %q not found in atespace %q", req.Name, atespace)
+		}
 		return nil, status.Errorf(codes.Internal, "deleting gateway: %v", err)
 	}
 	return &v1alpha1.DeleteGatewayResponse{}, nil
@@ -358,6 +361,9 @@ func (s *Server) DeleteWorkspace(ctx context.Context, req *v1alpha1.DeleteWorksp
 		atespace = "default"
 	}
 	if err := s.store.DeleteWorkspace(ctx, atespace, req.Name); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "workspace %q not found in atespace %q", req.Name, atespace)
+		}
 		return nil, status.Errorf(codes.Internal, "deleting workspace: %v", err)
 	}
 	return &v1alpha1.DeleteWorkspaceResponse{}, nil
@@ -441,6 +447,9 @@ func (s *Server) DeleteModel(ctx context.Context, req *v1alpha1.DeleteModelReque
 		atespace = "default"
 	}
 	if err := s.store.DeleteModel(ctx, atespace, req.Name); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "model %q not found in atespace %q", req.Name, atespace)
+		}
 		return nil, status.Errorf(codes.Internal, "deleting model: %v", err)
 	}
 	return &v1alpha1.DeleteModelResponse{}, nil

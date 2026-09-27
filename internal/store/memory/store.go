@@ -263,7 +263,11 @@ func (s *MemoryStore) DeleteGateway(ctx context.Context, atespace, name string) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.gateways, taskKey(atespace, name))
+	key := taskKey(atespace, name)
+	if _, ok := s.gateways[key]; !ok {
+		return store.ErrNotFound
+	}
+	delete(s.gateways, key)
 	return nil
 }
 
@@ -311,7 +315,11 @@ func (s *MemoryStore) DeleteModel(ctx context.Context, atespace, name string) er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.models, taskKey(atespace, name))
+	key := taskKey(atespace, name)
+	if _, ok := s.models[key]; !ok {
+		return store.ErrNotFound
+	}
+	delete(s.models, key)
 	return nil
 }
 
@@ -359,7 +367,11 @@ func (s *MemoryStore) DeleteWorkspace(ctx context.Context, atespace, name string
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.workspaces, taskKey(atespace, name))
+	key := taskKey(atespace, name)
+	if _, ok := s.workspaces[key]; !ok {
+		return store.ErrNotFound
+	}
+	delete(s.workspaces, key)
 	return nil
 }
 

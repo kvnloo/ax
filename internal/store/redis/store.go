@@ -150,6 +150,11 @@ func (s *Store) SaveTask(ctx context.Context, task *v1alpha1.Task) error {
 	if task.Status == nil {
 		task.Status = &v1alpha1.TaskStatus{}
 	}
+	if task.Spec == nil {
+		// A missing spec is valid (e.g. `ax apply` of a metadata-only
+		// manifest); default it so readers never see a nil Spec.
+		task.Spec = &v1alpha1.TaskSpec{}
+	}
 	if task.Status.Phase == "" {
 		task.Status.Phase = "Pending"
 	}

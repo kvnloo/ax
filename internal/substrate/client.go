@@ -353,7 +353,10 @@ func (c *Client) EnsureActor(ctx context.Context, atespace, actorName, templateA
 							return actor, nil
 						}
 						if status.Code(err) != codes.AlreadyExists {
-							break
+							// A genuine creation failure is not a deletion still
+							// finalizing; surface it instead of reporting the
+							// actor as still deleting.
+							return nil, fmt.Errorf("creating actor %s/%s: %w", atespace, actorName, err)
 						}
 					}
 					return nil, fmt.Errorf("actor %s/%s is still deleting; please retry", atespace, actorName)

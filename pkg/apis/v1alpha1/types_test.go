@@ -595,3 +595,27 @@ func TestValidateWorkspace_Files(t *testing.T) {
 		t.Errorf("expected path is required error, got %v", err)
 	}
 }
+
+func TestValidateWorkspace_GitDirTraversal(t *testing.T) {
+	ws := &v1alpha1.Workspace{
+		Metadata: &v1alpha1.ObjectMeta{Name: "valid-ws"},
+		Spec: &v1alpha1.WorkspaceSpec{
+			Git: []*v1alpha1.GitRepo{
+				{Repo: "https://example.com/r.git", Dir: "../../evil"},
+			},
+		},
+	}
+	if err := v1alpha1.ValidateWorkspace(ws); err == nil || !strings.Contains(err.Error(), "spec.git[0]") {
+		t.Errorf("expected traversal rejection on spec.git[0], got %v", err)
+	}
+	// Absolute dirs are honored by design and stay allowed.
+	ws.Spec.Git[0].Dir = "/opt/data/repos"
+	if err := v1alpha1.ValidateWorkspace(ws); err != nil {
+		t.Errorf("absolute git dir should be allowed, got %v", err)
+	}
+	// Plain relative dirs stay allowed.
+	ws.Spec.Git[0].Dir = "sub/dir"
+	if err := v1alpha1.ValidateWorkspace(ws); err != nil {
+		t.Errorf("relative git dir should be allowed, got %v", err)
+	}
+}

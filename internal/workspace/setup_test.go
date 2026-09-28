@@ -331,3 +331,52 @@ func TestSetupWorkspace_InlinedFiles(t *testing.T) {
 		t.Errorf("unexpected content in notes.txt: %s", string(notesData))
 	}
 }
+
+func TestSetupWorkspace_GitDirTraversalRefused(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "ax-ws-traversal-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// The traversal target must not be created: probe for it and clean up.
+	outside := filepath.Join(filepath.Dir(tempDir), "ax-traversal-probe")
+	_ = os.RemoveAll(outside)
+	defer func() { _ = os.RemoveAll(outside) }()
+
+	ws := &v1alpha1.Workspace{
+		Metadata: &v1alpha1.ObjectMeta{
+			Name: "test-git-traversal",
+		},
+		Spec: &v1alpha1.WorkspaceSpec{
+			Git: []*v1alpha1.GitRepo{
+				{
+					Repo: "/nonexistent-src",
+					Dir:  "../ax-traversal-probe",
+				},
+			},
+		},
+	}
+
+	stateDir := filepath.Join(tempDir, "ax-state")
+	origAXDir := workspace.AXDir
+	workspace.AXDir = stateDir
+	defer func() { workspace.AXDir = origAXDir }()
+
+	res, err := workspace.SetupWorkspace(context.Background(), ws, tempDir, "")
+	if err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	if len(res.ClonedRepos) != 0 {
+		t.Errorf("expected 0 cloned repos, got %d", len(res.ClonedRepos))
+	}
+	// Red-on-base discriminator: on base the ".." dir escapes targetPath and
+	// os.MkdirAll creates it outside the workspace.
+	if _, statErr := os.Stat(outside); !os.IsNotExist(statErr) {
+		t.Errorf("traversal clone destination %s must not be created outside the workspace", outside)
+	}
+	marker := filepath.Join(stateDir, workspace.MarkerName(tempDir))
+	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+		t.Errorf("expected maiden-run marker to be withheld when a git destination is refused")
+	}
+}

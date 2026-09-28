@@ -139,6 +139,11 @@ func cloneRepos(ctx context.Context, repos []*v1alpha1.GitRepo, targetPath strin
 		}
 
 		dest := cloneDestination(repo, targetPath)
+		if !gitDirContained(repo.GetDir(), targetPath) {
+			ok = false
+			slog.Warn("refusing git clone destination outside the workspace directory", "repo", repo.Repo, "dir", repo.Dir)
+			continue
+		}
 		if err := os.MkdirAll(dest, dirPerm); err != nil {
 			slog.Warn("failed to create destination dir", "dir", dest, "error", err)
 		}
@@ -192,6 +197,19 @@ func cloneDestination(repo *v1alpha1.GitRepo, targetPath string) string {
 		}
 	}
 	return filepath.Join(targetPath, name)
+}
+
+// gitDirContained reports whether a git repo's Dir stays inside the workspace
+// directory. An absolute Dir is honored as-is by design (see cloneDestination),
+// but a relative Dir must not escape targetPath via "..": the task-runner
+// clones into it as root, so a traversal would let a workspace manifest direct
+// git writes outside the workspace.
+func gitDirContained(dir, targetPath string) bool {
+	if dir == "" || dir == "." || filepath.IsAbs(dir) {
+		return true
+	}
+	rel, err := filepath.Rel(targetPath, filepath.Join(targetPath, dir))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // fetchRepo initializes dir as a git repository pointed at repoURL, fetches branch,

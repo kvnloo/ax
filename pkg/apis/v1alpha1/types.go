@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -294,6 +295,31 @@ func ValidateWorkspace(w *Workspace) error {
 				return fmt.Errorf("%s: path is required", field)
 			}
 		}
+		for i, g := range w.GetSpec().GetGit() {
+			field := fmt.Sprintf("spec.git[%d]", i)
+			if err := ValidateWorkspaceGitDir(g.GetDir()); err != nil {
+				return fmt.Errorf("%s: %w", field, err)
+			}
+		}
+	}
+	return nil
+}
+
+// ValidateWorkspaceGitDir reports whether dir is a safe git clone destination
+// for a workspace manifest. Absolute paths are honored by design (see
+// cloneDestination in internal/workspace), but a relative dir must not escape
+// the workspace directory via "..", since the task-runner clones into it as
+// root.
+func ValidateWorkspaceGitDir(dir string) error {
+	if dir == "" || dir == "." || filepath.IsAbs(dir) {
+		return nil
+	}
+	// Clean keeps a leading ".." for relative paths, so check the cleaned
+	// form directly: joining against a scratch root first would resolve the
+	// ".." away and hide the escape.
+	clean := filepath.Clean(dir)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("dir %q must not escape the workspace directory", dir)
 	}
 	return nil
 }

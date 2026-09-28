@@ -503,3 +503,67 @@ func TestServer_DeleteTask_UpdateStatusError(t *testing.T) {
 		t.Errorf("expected ReconcileDelete not to be called if UpdateTaskStatus fails, got %d calls", rec.deleteCount)
 	}
 }
+
+func TestWatchTask_EndsOnDelete(t *testing.T) {
+	memStore := memory.NewStore()
+	srv := server.NewServer(memStore)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer ln.Close()
+
+	httpServer := &http.Server{Handler: srv.Handler()}
+	httpServer.Protocols = new(http.Protocols)
+	httpServer.Protocols.SetHTTP1(true)
+	httpServer.Protocols.SetUnencryptedHTTP2(true)
+	go func() { _ = httpServer.Serve(ln) }()
+	defer httpServer.Close()
+
+	conn, err := grpc.NewClient(ln.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("failed to dial gRPC: %v", err)
+	}
+	defer conn.Close()
+	client := v1alpha1.NewAXClient(conn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if _, err := client.CreateTask(ctx, &v1alpha1.CreateTaskRequest{Task: &v1alpha1.Task{
+		Metadata: &v1alpha1.ObjectMeta{Name: "watch-delete-task"},
+		Spec:     &v1alpha1.TaskSpec{Image: "alpine"},
+	}}); err != nil {
+		t.Fatalf("CreateTask failed: %v", err)
+	}
+
+	stream, err := client.WatchTask(ctx, &v1alpha1.WatchTaskRequest{Atespace: "default", Name: "watch-delete-task"})
+	if err != nil {
+		t.Fatalf("WatchTask failed: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("expected INITIAL event, got %v", err)
+	}
+
+	if _, err := client.DeleteTask(ctx, &v1alpha1.DeleteTaskRequest{Atespace: "default", Name: "watch-delete-task"}); err != nil {
+		t.Fatalf("DeleteTask failed: %v", err)
+	}
+
+	// Red-on-base discriminator: without deletion detection the stream below
+	// blocks until ctx expires; with the fix it ends with NotFound promptly.
+	deadline := time.Now().Add(12 * time.Second)
+	for {
+		_, err := stream.Recv()
+		if err == nil {
+			if time.Now().After(deadline) {
+				t.Fatal("watch did not end after task deletion")
+			}
+			continue
+		}
+		if status.Code(err) == codes.NotFound {
+			return
+		}
+		t.Fatalf("expected NotFound after task deletion, got %v", err)
+	}
+}

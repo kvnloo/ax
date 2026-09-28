@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/ax/internal/lock"
 	"github.com/google/ax/internal/store"
@@ -29,6 +30,12 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// watchDeletePollInterval bounds how long a watch can trail a task deletion:
+// the stores publish no deletion events, so WatchTask polls for the task's
+// existence on this interval and ends the stream with NotFound once it is
+// gone. Tests shrink it.
+var watchDeletePollInterval = 5 * time.Second
 
 // Reconciler coordinates sandbox/actor lifecycles on Agent Substrate directly.
 type Reconciler interface {
@@ -389,10 +396,20 @@ func (s *Server) WatchTask(req *v1alpha1.WatchTaskRequest, stream grpc.ServerStr
 		}
 	}
 
+	// The stores do not publish task deletions, so without this a watch on a
+	// task deleted mid-watch would hang until the client gives up. Poll for
+	// the task's existence and end the stream with NotFound once it is gone.
+	ticker := time.NewTicker(watchDeletePollInterval)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-ticker.C:
+			if _, err := s.store.GetTask(ctx, atespace, req.Name); err != nil && errors.Is(err, store.ErrNotFound) {
+				return status.Errorf(codes.NotFound, "task %q was deleted", req.Name)
+			}
 		case task, ok := <-ch:
 			if !ok {
 				return nil

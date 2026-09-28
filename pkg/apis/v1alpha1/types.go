@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -293,7 +294,28 @@ func ValidateWorkspace(w *Workspace) error {
 			if f == nil || f.GetPath() == "" {
 				return fmt.Errorf("%s: path is required", field)
 			}
+			if err := ValidateWorkspaceFilePath(f.GetPath()); err != nil {
+				return fmt.Errorf("%s: %w", field, err)
+			}
 		}
+	}
+	return nil
+}
+
+// ValidateWorkspaceFilePath reports whether p is a safe destination for an
+// inlined workspace file: a relative path that stays inside the workspace
+// directory. Absolute paths and ".." escapes are rejected because the
+// task-runner writes these files as root.
+func ValidateWorkspaceFilePath(p string) error {
+	if filepath.IsAbs(p) {
+		return fmt.Errorf("path %q must be relative to the workspace directory", p)
+	}
+	// Clean keeps a leading ".." for relative paths, so check the cleaned
+	// form directly: joining against a scratch root first would resolve the
+	// ".." away and hide the escape.
+	clean := filepath.Clean(p)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path %q must not escape the workspace directory", p)
 	}
 	return nil
 }

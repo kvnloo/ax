@@ -595,3 +595,32 @@ func TestValidateWorkspace_Files(t *testing.T) {
 		t.Errorf("expected path is required error, got %v", err)
 	}
 }
+
+func TestValidateWorkspace_FilesPathContainment(t *testing.T) {
+	bad := []string{
+		"/etc/passwd",
+		"/abs/path.txt",
+		"../escape.txt",
+		"a/../../escape.txt",
+		"..",
+	}
+	for _, p := range bad {
+		ws := &v1alpha1.Workspace{
+			Metadata: &v1alpha1.ObjectMeta{Name: "valid-ws"},
+			Spec:     &v1alpha1.WorkspaceSpec{Files: []*v1alpha1.File{{Path: p, Content: "x"}}},
+		}
+		if err := v1alpha1.ValidateWorkspace(ws); err == nil {
+			t.Errorf("ValidateWorkspace accepted escaping path %q", p)
+		}
+	}
+	good := []string{"AGENTS.md", "config/settings.json", "a/./b.txt", "a/b/../c.txt"}
+	for _, p := range good {
+		ws := &v1alpha1.Workspace{
+			Metadata: &v1alpha1.ObjectMeta{Name: "valid-ws"},
+			Spec:     &v1alpha1.WorkspaceSpec{Files: []*v1alpha1.File{{Path: p, Content: "x"}}},
+		}
+		if err := v1alpha1.ValidateWorkspace(ws); err != nil {
+			t.Errorf("ValidateWorkspace rejected safe path %q: %v", p, err)
+		}
+	}
+}

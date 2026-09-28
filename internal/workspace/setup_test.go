@@ -331,3 +331,51 @@ func TestSetupWorkspace_InlinedFiles(t *testing.T) {
 		t.Errorf("unexpected content in notes.txt: %s", string(notesData))
 	}
 }
+
+func TestSetupWorkspace_InlinedFilesPathContainment(t *testing.T) {
+	parentDir, err := os.MkdirTemp("", "ax-ws-contain-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(parentDir)
+	targetDir := filepath.Join(parentDir, "ws")
+	absTarget := filepath.Join(parentDir, "abs-target.txt")
+
+	ws := &v1alpha1.Workspace{
+		Metadata: &v1alpha1.ObjectMeta{Name: "contain-ws"},
+		Spec: &v1alpha1.WorkspaceSpec{
+			Files: []*v1alpha1.File{
+				{Path: "../escape.txt", Content: "traversal"},
+				{Path: "a/../../escape2.txt", Content: "traversal"},
+				{Path: absTarget, Content: "absolute"},
+				{Path: "ok/nested.txt", Content: "safe"},
+			},
+		},
+	}
+
+	stateDir := filepath.Join(parentDir, "ax-state")
+	origAXDir := workspace.AXDir
+	workspace.AXDir = stateDir
+	defer func() { workspace.AXDir = origAXDir }()
+
+	if _, err := workspace.SetupWorkspace(context.Background(), ws, targetDir, ""); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+
+	for _, p := range []string{
+		filepath.Join(parentDir, "escape.txt"),
+		filepath.Join(parentDir, "escape2.txt"),
+		absTarget,
+	} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("inlined file escaped the workspace directory: %s was written", p)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(targetDir, "ok", "nested.txt"))
+	if err != nil {
+		t.Fatalf("safe inlined file was not written: %v", err)
+	}
+	if string(data) != "safe" {
+		t.Errorf("unexpected content in ok/nested.txt: %s", string(data))
+	}
+}

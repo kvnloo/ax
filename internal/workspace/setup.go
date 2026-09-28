@@ -376,17 +376,24 @@ func RepoDirName(repoURL string) string {
 	return trimmed[idx+1:]
 }
 
-// writeFiles writes inlined files into the workspace directory.
+// writeFiles writes inlined files into the workspace directory. Every file is
+// confined to targetPath: absolute paths are refused, and relative paths that
+// would escape targetPath via ".." are refused. Without this, a workspace
+// manifest could overwrite arbitrary files in the task-runner container (which
+// runs as root), e.g. the agent bootstrap script or AX system state.
 func writeFiles(files []*v1alpha1.File, targetPath string) {
 	for _, f := range files {
 		if f == nil || f.GetPath() == "" {
 			continue
 		}
-		var dest string
 		if filepath.IsAbs(f.GetPath()) {
-			dest = f.GetPath()
-		} else {
-			dest = filepath.Join(targetPath, f.GetPath())
+			slog.Warn("refusing to write inlined workspace file with absolute path", "path", f.GetPath())
+			continue
+		}
+		dest := filepath.Join(targetPath, f.GetPath())
+		if rel, err := filepath.Rel(targetPath, dest); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			slog.Warn("refusing to write inlined workspace file outside the workspace directory", "path", f.GetPath())
+			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(dest), dirPerm); err != nil {
 			slog.Warn("failed to create directory for workspace file", "path", dest, "error", err)

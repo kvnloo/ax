@@ -138,6 +138,17 @@ else
 end
 `)
 
+// renewScript extends the lock's TTL, but only if the caller's token still
+// owns the key. The get+pexpire runs atomically inside the script so a
+// renewal can never extend a lock that has already changed hands.
+var renewScript = redis.NewScript(`
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("pexpire", KEYS[1], ARGV[2])
+else
+    return 0
+end
+`)
+
 // ChannelKey returns the Pub/Sub channel used to notify waiters when a lock is released.
 func ChannelKey(kind, atespace, name string) string {
 	if atespace == "" {
@@ -173,10 +184,19 @@ func (r *RedisLocker) Lock(ctx context.Context, kind, atespace, name string) (fu
 	}
 	token := hex.EncodeToString(tokenBytes)
 
-	makeUnlock := func() func() {
+	// held returns the unlock func for a successfully acquired lock. It
+	// starts the TTL renewal loop that keeps the key alive while the lock
+	// is held: without renewal the key would expire mid-operation (the
+	// server holds task locks across full substrate reconciles, which
+	// routinely exceed the TTL), letting a second caller acquire the same
+	// lock concurrently.
+	held := func() func() {
+		stop := make(chan struct{})
+		go r.renewLoop(key, token, stop)
 		var once sync.Once
 		return func() {
 			once.Do(func() {
+				close(stop)
 				releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				_ = releaseAndNotifyScript.Run(releaseCtx, r.client, []string{key, chanKey}, token).Err()
@@ -196,7 +216,7 @@ func (r *RedisLocker) Lock(ctx context.Context, kind, atespace, name string) (fu
 		return nil, fmt.Errorf("acquiring lock %s: %w", key, err)
 	}
 	if ok {
-		return makeUnlock(), nil
+		return held(), nil
 	}
 
 	// 2. Slow Path: Subscribe to Pub/Sub channel for instant wakeup when released
@@ -209,7 +229,7 @@ func (r *RedisLocker) Lock(ctx context.Context, kind, atespace, name string) (fu
 		return nil, fmt.Errorf("acquiring lock %s: %w", key, err)
 	}
 	if ok {
-		return makeUnlock(), nil
+		return held(), nil
 	}
 
 	msgCh := pubsub.Channel()
@@ -231,7 +251,36 @@ func (r *RedisLocker) Lock(ctx context.Context, kind, atespace, name string) (fu
 			return nil, fmt.Errorf("acquiring lock %s: %w", key, err)
 		}
 		if ok {
-			return makeUnlock(), nil
+			return held(), nil
+		}
+	}
+}
+
+// renewLoop extends the lock's TTL every ttl/3 until stop is closed. Renewal
+// is token-checked inside a Lua script, so it can never extend a key that
+// has expired and been re-acquired by someone else: in that case the script
+// returns 0 and the loop exits. Transient script errors are retried on the
+// next tick; the loop always exits when the lock is released.
+func (r *RedisLocker) renewLoop(key, token string, stop <-chan struct{}) {
+	interval := r.ttl / 3
+	if interval < time.Millisecond {
+		interval = time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			v, err := renewScript.Run(context.Background(), r.client,
+				[]string{key}, token, int64(r.ttl/time.Millisecond)).Result()
+			if err != nil {
+				continue
+			}
+			if n, _ := v.(int64); n == 0 {
+				return
+			}
 		}
 	}
 }

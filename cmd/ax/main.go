@@ -222,34 +222,65 @@ func runApply(serverURL string, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Manifests are parsed here and submitted one resource at a time through the
-	// typed RPCs; the server never sees raw YAML.
+	return applyManifest(ctx, client, data)
+}
+
+// isEmptyManifestDoc reports whether a decoded YAML document is empty: either
+// a zero node, or a document node holding only an implicitly-tagged null
+// scalar, which is how yaml.v3 represents a bare "---" separator.
+func isEmptyManifestDoc(doc *yaml.Node) bool {
+	if doc.Kind == 0 {
+		return true
+	}
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) == 0 {
+		return true
+	}
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) == 1 {
+		root := doc.Content[0]
+		if root.Kind == yaml.ScalarNode && root.Tag == "!!null" && root.Value == "" && root.Style&yaml.TaggedStyle == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// manifestDocs decodes data into its real (non-empty) documents in order.
+// Blank "---" separators are skipped here so that document numbers in errors
+// always count real documents.
+func manifestDocs(data []byte) ([]*yaml.Node, error) {
+	var docs []*yaml.Node
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
-	for docIndex := 1; ; docIndex++ {
+	for {
 		var doc yaml.Node
 		if err := decoder.Decode(&doc); err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil
+				return docs, nil
 			}
-			return fmt.Errorf("decoding document %d: %w", docIndex, err)
+			return nil, fmt.Errorf("decoding document %d: %w", len(docs)+1, err)
 		}
-		if doc.Kind == 0 || (doc.Kind == yaml.DocumentNode && len(doc.Content) == 0) {
-			continue // empty document, e.g. a trailing "---"
+		if isEmptyManifestDoc(&doc) {
+			continue
 		}
-		if doc.Kind == yaml.DocumentNode && len(doc.Content) == 1 {
-			root := doc.Content[0]
-			// yaml.v3 represents empty documents as implicitly tagged null scalars with no value.
-			if root.Kind == yaml.ScalarNode && root.Tag == "!!null" && root.Value == "" && root.Style&yaml.TaggedStyle == 0 {
-				continue
-			}
-		}
+		docs = append(docs, &doc)
+	}
+}
 
-		kind, name, outcome, err := applyDocument(ctx, client, &doc)
+// applyManifest applies each real document in data in order, printing a
+// kubectl-style outcome line per document. Document numbers in errors count
+// real documents only, so blank separators never shift the numbering.
+func applyManifest(ctx context.Context, client v1alpha1.AXClient, data []byte) error {
+	docs, err := manifestDocs(data)
+	if err != nil {
+		return err
+	}
+	for i, doc := range docs {
+		kind, name, outcome, err := applyDocument(ctx, client, doc)
 		if err != nil {
-			return fmt.Errorf("applying document %d: %w", docIndex, err)
+			return fmt.Errorf("applying document %d: %w", i+1, err)
 		}
 		fmt.Printf("%s.ax.io/%s %s\n", strings.ToLower(kind), name, outcome)
 	}
+	return nil
 }
 
 // applyDocument decodes one manifest by its kind and submits it with the matching

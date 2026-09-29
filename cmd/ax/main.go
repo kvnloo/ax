@@ -959,20 +959,31 @@ func runTunnel(args []string) error {
 	}
 }
 
-func runSSH(serverURL, atespace, kubeContext string, args []string) error {
+// parseSSHCommand splits ax ssh args into the task name and the remote
+// command. A bare "--" ends option parsing: words after the first "--" are
+// appended verbatim to any command words before it, so
+// `ax ssh mytask ls -- -a` runs `ls -a` remotely instead of silently
+// dropping `ls`.
+func parseSSHCommand(args []string) (taskName string, cmd []string, err error) {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: ax ssh <task-name> [-- command...]")
+		return "", nil, fmt.Errorf("usage: ax ssh <task-name> [-- command...]")
 	}
-
-	taskName := args[0]
-	var cmdToRun []string
-	for i := 1; i < len(args); i++ {
-		if args[i] == "--" {
-			cmdToRun = args[i+1:]
-			break
-		} else {
-			cmdToRun = append(cmdToRun, args[i])
+	taskName = args[0]
+	seenDashDash := false
+	for _, a := range args[1:] {
+		if !seenDashDash && a == "--" {
+			seenDashDash = true
+			continue
 		}
+		cmd = append(cmd, a)
+	}
+	return taskName, cmd, nil
+}
+
+func runSSH(serverURL, atespace, kubeContext string, args []string) error {
+	taskName, cmdToRun, err := parseSSHCommand(args)
+	if err != nil {
+		return err
 	}
 
 	if len(cmdToRun) == 0 {

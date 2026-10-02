@@ -22,26 +22,45 @@ func (f *fakeApplyClient) CreateTask(ctx context.Context, req *v1alpha1.CreateTa
 	return req.Task, nil
 }
 
-func TestManifestDocsSkipsBlankSeparators(t *testing.T) {
+func TestApplyManifestSkipsBlankSeparators(t *testing.T) {
 	data := "---\nkind: Task\nmetadata:\n  name: a\n---\n---\nkind: Task\nmetadata:\n  name: b\n"
-	docs, err := manifestDocs([]byte(data))
-	if err != nil {
+	client := &fakeApplyClient{}
+	if err := applyManifest(context.Background(), client, []byte(data)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(docs) != 2 {
-		t.Fatalf("got %d docs, want 2 (blank separator must not count)", len(docs))
+	if len(client.created) != 2 {
+		t.Fatalf("created %d tasks, want 2 (blank separator must not count)", len(client.created))
 	}
 }
 
-func TestManifestDocsDecodeErrorSurfaces(t *testing.T) {
-	// A syntax error anywhere in the stream must surface as an error.
-	// (Which document number it reports is best-effort: yaml.v3's scanner
-	// reads ahead, so a later-stream syntax error can surface on an
-	// earlier Decode call. Only the "applying document N" numbering, which
-	// is computed after successful decodes, is pinned to real documents.)
+func TestApplyManifestDecodeErrorSurfaces(t *testing.T) {
+	// yaml.v3 can read ahead, so syntax-error indices are best-effort.
 	data := "---\nkind: Task\nmetadata:\n  name: a\n---\n---\n\t: bad\n"
-	if _, err := manifestDocs([]byte(data)); err == nil {
+	if err := applyManifest(context.Background(), &fakeApplyClient{}, []byte(data)); err == nil {
 		t.Fatal("expected decode error, got nil")
+	}
+}
+
+func TestApplyManifestKeepsSuccessfulDocumentsBeforeDecodeError(t *testing.T) {
+	data := "kind: Task\nmetadata:\n  name: first\n---\n---\nkind: Task\nmetadata:\n  name: second\n---\n[\n"
+	client := &fakeApplyClient{}
+	err := applyManifest(context.Background(), client, []byte(data))
+	if err == nil || !strings.Contains(err.Error(), "decoding document 3:") {
+		t.Fatalf("expected decode error for third real document, got %v", err)
+	}
+	if len(client.created) != 2 {
+		t.Fatalf("created %d tasks, want 2 before the decode error", len(client.created))
+	}
+	if client.created[0].Metadata.Name != "first" || client.created[1].Metadata.Name != "second" {
+		t.Fatalf("tasks applied out of order: %v", client.created)
+	}
+}
+
+func TestApplyManifestStopsBeforeLaterDecodeError(t *testing.T) {
+	data := "kind: Bogus\n---\n[\n"
+	err := applyManifest(context.Background(), &fakeApplyClient{}, []byte(data))
+	if err == nil || !strings.Contains(err.Error(), "applying document 1:") {
+		t.Fatalf("expected first document's apply error, got %v", err)
 	}
 }
 

@@ -244,43 +244,30 @@ func isEmptyManifestDoc(doc *yaml.Node) bool {
 	return false
 }
 
-// manifestDocs decodes data into its real (non-empty) documents in order.
-// Blank "---" separators are skipped here so that document numbers in errors
-// always count real documents.
-func manifestDocs(data []byte) ([]*yaml.Node, error) {
-	var docs []*yaml.Node
+// applyManifest decodes and applies one resource at a time through the typed
+// RPCs; the server never sees raw YAML. Successful documents stay applied if a
+// later document fails. Error indices count real documents, not blank separators.
+func applyManifest(ctx context.Context, client v1alpha1.AXClient, data []byte) error {
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	docIndex := 0
 	for {
 		var doc yaml.Node
 		if err := decoder.Decode(&doc); err != nil {
 			if errors.Is(err, io.EOF) {
-				return docs, nil
+				return nil
 			}
-			return nil, fmt.Errorf("decoding document %d: %w", len(docs)+1, err)
+			return fmt.Errorf("decoding document %d: %w", docIndex+1, err)
 		}
 		if isEmptyManifestDoc(&doc) {
 			continue
 		}
-		docs = append(docs, &doc)
-	}
-}
-
-// applyManifest applies each real document in data in order, printing a
-// kubectl-style outcome line per document. Document numbers in errors count
-// real documents only, so blank separators never shift the numbering.
-func applyManifest(ctx context.Context, client v1alpha1.AXClient, data []byte) error {
-	docs, err := manifestDocs(data)
-	if err != nil {
-		return err
-	}
-	for i, doc := range docs {
-		kind, name, outcome, err := applyDocument(ctx, client, doc)
+		docIndex++
+		kind, name, outcome, err := applyDocument(ctx, client, &doc)
 		if err != nil {
-			return fmt.Errorf("applying document %d: %w", i+1, err)
+			return fmt.Errorf("applying document %d: %w", docIndex, err)
 		}
 		fmt.Printf("%s.ax.io/%s %s\n", strings.ToLower(kind), name, outcome)
 	}
-	return nil
 }
 
 // applyDocument decodes one manifest by its kind and submits it with the matching

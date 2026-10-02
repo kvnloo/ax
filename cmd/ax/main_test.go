@@ -47,7 +47,7 @@ func TestRunApplyEmptyDocuments(t *testing.T) {
 		{name: "leading empty document", manifest: "---\n---\n" + first, wantNames: []string{"first"}},
 		{name: "trailing separator", manifest: first + "---\n", wantNames: []string{"first"}},
 		{name: "middle empty documents", manifest: first + "---\n# empty\n---\n---\n" + second, wantNames: []string{"first", "second"}},
-		{name: "missing kind", manifest: first + "---\n---\n{}\n---\n" + second, wantNames: []string{"first"}, wantErr: "applying document 3: missing kind"},
+		{name: "missing kind", manifest: first + "---\n---\n{}\n---\n" + second, wantNames: []string{"first"}, wantErr: "applying document 2: missing kind"},
 		{name: "explicit null", manifest: "null\n", wantErr: "applying document 1: missing kind"},
 		{name: "tagged null", manifest: "!!null\n", wantErr: "applying document 1: missing kind"},
 		{name: "tagged quoted null", manifest: "!!null \"\"\n", wantErr: "applying document 1: missing kind"},

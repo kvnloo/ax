@@ -247,6 +247,7 @@ func isEmptyManifestDoc(doc *yaml.Node) bool {
 // manifestDocs decodes data into its real (non-empty) documents in order.
 // Blank "---" separators are skipped here so that document numbers in errors
 // always count real documents.
+// On a decoding error, the successfully decoded prefix is returned with the error.
 func manifestDocs(data []byte) ([]*yaml.Node, error) {
 	var docs []*yaml.Node
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
@@ -256,7 +257,7 @@ func manifestDocs(data []byte) ([]*yaml.Node, error) {
 			if errors.Is(err, io.EOF) {
 				return docs, nil
 			}
-			return nil, fmt.Errorf("decoding document %d: %w", len(docs)+1, err)
+			return docs, fmt.Errorf("decoding document %d: %w", len(docs)+1, err)
 		}
 		if isEmptyManifestDoc(&doc) {
 			continue
@@ -269,10 +270,7 @@ func manifestDocs(data []byte) ([]*yaml.Node, error) {
 // kubectl-style outcome line per document. Document numbers in errors count
 // real documents only, so blank separators never shift the numbering.
 func applyManifest(ctx context.Context, client v1alpha1.AXClient, data []byte) error {
-	docs, err := manifestDocs(data)
-	if err != nil {
-		return err
-	}
+	docs, decodeErr := manifestDocs(data)
 	for i, doc := range docs {
 		kind, name, outcome, err := applyDocument(ctx, client, doc)
 		if err != nil {
@@ -280,7 +278,7 @@ func applyManifest(ctx context.Context, client v1alpha1.AXClient, data []byte) e
 		}
 		fmt.Printf("%s.ax.io/%s %s\n", strings.ToLower(kind), name, outcome)
 	}
-	return nil
+	return decodeErr
 }
 
 // applyDocument decodes one manifest by its kind and submits it with the matching

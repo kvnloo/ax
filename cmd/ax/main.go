@@ -492,12 +492,42 @@ func runGet(serverURL, atespace string, args []string) error {
 	return fmt.Errorf("unknown resource %q", resource)
 }
 
-func runDescribe(serverURL, atespace string, args []string) error {
+// parseDescribeArgs validates ax describe args, returning the canonical kind
+// and the resource name. Unknown kinds are an error instead of silently
+// describing a task.
+func parseDescribeArgs(args []string) (kind, name string, err error) {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: ax describe <task|workspace|model> <name>")
+		return "", "", fmt.Errorf("usage: ax describe <task|workspace|model> <name>")
 	}
-	kind := strings.ToLower(args[0])
-	name := args[1]
+	kind, err = normalizeKind(args[0])
+	if err != nil {
+		return "", "", err
+	}
+	return kind, args[1], nil
+}
+
+// parseWatchArgs validates ax watch args, returning the task name. Only the
+// task kind is watchable; anything else is an error instead of being
+// silently ignored.
+func parseWatchArgs(args []string) (name string, err error) {
+	if len(args) < 2 {
+		return "", fmt.Errorf("usage: ax watch task <name>")
+	}
+	kind, err := normalizeKind(args[0])
+	if err != nil {
+		return "", err
+	}
+	if kind != v1alpha1.KindTask {
+		return "", fmt.Errorf("unsupported kind %q (ax watch only supports tasks)", args[0])
+	}
+	return args[1], nil
+}
+
+func runDescribe(serverURL, atespace string, args []string) error {
+	kind, name, err := parseDescribeArgs(args)
+	if err != nil {
+		return err
+	}
 
 	client, conn, err := getAXClient(serverURL)
 	if err != nil {
@@ -508,7 +538,7 @@ func runDescribe(serverURL, atespace string, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if kind == "model" || kind == "models" {
+	if kind == v1alpha1.KindModel {
 		m, err := client.GetModel(ctx, &v1alpha1.GetModelRequest{Atespace: atespace, Name: name})
 		if err != nil {
 			return fmt.Errorf("getting model %q: %w", name, err)
@@ -549,7 +579,7 @@ func runDescribe(serverURL, atespace string, args []string) error {
 		return nil
 	}
 
-	if kind == "workspace" || kind == "workspaces" {
+	if kind == v1alpha1.KindWorkspace {
 		ws, err := client.GetWorkspace(ctx, &v1alpha1.GetWorkspaceRequest{Atespace: atespace, Name: name})
 		if err != nil {
 			return fmt.Errorf("getting workspace %q: %w", name, err)
@@ -669,10 +699,10 @@ func runDescribe(serverURL, atespace string, args []string) error {
 }
 
 func runWatch(serverURL, atespace string, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: ax watch task <name>")
+	name, err := parseWatchArgs(args)
+	if err != nil {
+		return err
 	}
-	name := args[1]
 
 	client, conn, err := getAXClient(serverURL)
 	if err != nil {
@@ -773,7 +803,10 @@ func deleteResource(ctx context.Context, client v1alpha1.AXClient, kind, atespac
 // normalizeKind maps user-typed kinds ("task", "tasks", "Task") to the canonical
 // manifest kind, rejecting anything unknown.
 func normalizeKind(kind string) (string, error) {
-	switch strings.ToLower(strings.TrimSuffix(kind, "s")) {
+	// Lowercase before trimming the plural suffix: TrimSuffix is
+	// case-sensitive, so "TASKS" would otherwise survive as "tasks" and
+	// fail to match below.
+	switch strings.TrimSuffix(strings.ToLower(kind), "s") {
 	case "task":
 		return v1alpha1.KindTask, nil
 	case "workspace":
